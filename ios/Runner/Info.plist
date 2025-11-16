@@ -45,5 +45,11 @@
 	<true/>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
+	<key>NSBluetoothAlwaysUsageDescription</key>
+	<string>This app needs Bluetooth to connect to BLE devices.</string>
+	<key>NSBluetoothPeripheralUsageDescription</key>
+	<string>This app needs Bluetooth to connect to BLE devices.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>This app needs location access to scan for BLE devices.</string>
 </dict>
 </plist>
