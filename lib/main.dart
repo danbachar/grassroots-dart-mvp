@@ -240,7 +240,8 @@ class _BluetoothPageState extends State<BluetoothPage> {
   late final StreamSubscription _peripheralManagerStateChangedSubscription;
   late final StreamSubscription _readRequestedSubscription;
   late final StreamSubscription _writeRequestedSubscription;
-  late final StreamSubscription _connectionStateChangedSubscription;
+  late final StreamSubscription _peripheralConnectionStateChangedSubscription; // this is for the device who was paired with
+  late final StreamSubscription _centralConnectionStateChangedSubscription; // this is for the device who initiated the pairing
   late final deviceName = 'Voyager2';
 
   _BluetoothPageState():  _central = CentralManager(), _peripheral = PeripheralManager() {
@@ -273,7 +274,34 @@ class _BluetoothPageState extends State<BluetoothPage> {
               _scanResults = newResults;
             });
       });
-    _connectionStateChangedSubscription = _peripheral.connectionStateChanged.listen((eventArgs) {
+    _centralConnectionStateChangedSubscription = _central.connectionStateChanged.listen((eventArgs) {
+      final peripheral = eventArgs.peripheral;
+      final peripheralUuid = peripheral.uuid.toString();
+      print("Connection state changed: ${eventArgs.state} for device $peripheralUuid");
+      
+      if (eventArgs.state == ConnectionState.connected) {
+        print("Peripheral device connected: $peripheralUuid");
+        
+        // Check if already paired
+        if (_pairedDevices.any((d) => d.uuid == peripheralUuid)) {
+          print("Device already paired: $peripheralUuid");
+          return;
+        }
+
+        // Add the device to paired devices
+        setState(() {
+          _pairedDevices.add(PairedDevice(
+            uuid: peripheralUuid,
+            name: 'TODO',
+            peripheral: null,
+          ));
+          _chats[peripheralUuid] = [];
+        });
+      } else if (eventArgs.state == ConnectionState.disconnected) {
+        print("Peripheral device disconnected: $peripheralUuid");
+      }
+    });
+    _peripheralConnectionStateChangedSubscription = _peripheral.connectionStateChanged.listen((eventArgs) {
       final central = eventArgs.central;
       final centralUuid = central.uuid.toString();
       print("Connection state changed: ${eventArgs.state} for device $centralUuid");
@@ -349,9 +377,9 @@ class _BluetoothPageState extends State<BluetoothPage> {
     });
   }
 
-  BluetoothLowEnergyState get state => _central.state;
   bool get isScanning => _isScanning;
   bool get isAdvertising => _isAdvertising;
+  BluetoothLowEnergyState get state => _central.state;
   List<DiscoveredEventArgs> get scanResults => _scanResults;
 
   Future<void> showAppSettings() async {
@@ -394,13 +422,9 @@ class _BluetoothPageState extends State<BluetoothPage> {
       return;
     }
     
-    // Cancel the characteristic request subscriptions
-    await _readRequestedSubscription.cancel();
-    await _writeRequestedSubscription.cancel();
-    await _connectionStateChangedSubscription.cancel();
-    // _readRequestedSubscription = null;
-    // _writeRequestedSubscription = null;
-    // _connectionStateChangedSubscription = null;
+    // await _readRequestedSubscription.cancel();
+    // await _writeRequestedSubscription.cancel();
+    // await _peripheralConnectionStateChangedSubscription.cancel();
     
     await _peripheral.stopAdvertising();
     setState(() {
@@ -419,29 +443,25 @@ class _BluetoothPageState extends State<BluetoothPage> {
       return;
     }
     
-    try {
-      print("Attempting to connect to $deviceName...");
-      await _central.connect(device);
-      print("Connected to $deviceName");
-      
-      // Discover services
-      await _central.discoverGATT(device);
-      print("Discovered GATT services");
-      
-      // Add to paired devices on this side
-      setState(() {
-        _pairedDevices.add(PairedDevice(
-          uuid: deviceUuid,
-          name: deviceName,
-          peripheral: device,
-        ));
-        _chats[deviceUuid] = [];
-      });
-      
-      print("Successfully paired with $deviceName");
-    } catch (e) {
-      print("Error pairing with device: $e");
-    }
+    print("Attempting to connect to $deviceName...");
+    await _central.connect(device);
+    print("Executed connect to $deviceName, waiting for connection change...");
+    
+    // // Discover services
+    // await _central.discoverGATT(device);
+    // print("Discovered GATT services");
+    
+    // // Add to paired devices on this side
+    // setState(() {
+    //   _pairedDevices.add(PairedDevice(
+    //     uuid: deviceUuid,
+    //     name: deviceName,
+    //     peripheral: device,
+    //   ));
+    //   _chats[deviceUuid] = [];
+    // });
+    
+    // print("Successfully paired with $deviceName");
   }
 
   Future<void> sendMessage(String deviceUuid, String messageText) async {
@@ -580,7 +600,8 @@ class _BluetoothPageState extends State<BluetoothPage> {
     _scanSubscription.cancel();
     _readRequestedSubscription.cancel();
     _writeRequestedSubscription.cancel();
-    _connectionStateChangedSubscription.cancel();
+    _centralConnectionStateChangedSubscription.cancel();
+    _peripheralConnectionStateChangedSubscription.cancel();
     super.dispose();
   }
 
