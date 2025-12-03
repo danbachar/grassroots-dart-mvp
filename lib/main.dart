@@ -1,10 +1,13 @@
 import 'dart:async';
-import 'dart:typed_data';
 import 'package:english_words/english_words.dart';
-import 'package:flutter/material.dart' hide ConnectionState;
+import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
-import 'package:bluetooth_low_energy/bluetooth_low_energy.dart';
-import 'dart:io' show Platform;
+
+import 'app_coordinator.dart';
+import 'models/peer.dart';
+import 'models/message.dart';
+import 'protocol/constants.dart';
+import 'pages/settings_page.dart';
 
 void main() {
   runApp(MyApp());
@@ -15,11 +18,18 @@ class MyApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ChangeNotifierProvider(
-      create: (context) => MyAppState(),
+    return MultiProvider(
+      providers: [
+        ChangeNotifierProvider(create: (context) => MyAppState()),
+        ChangeNotifierProvider(
+          create: (context) => AppCoordinator(myDisplayName: 'User'),
+        ),
+      ],
       child: MaterialApp(
         title: 'Grassroots',
-        theme: ThemeData(colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepOrange)),
+        theme: ThemeData(
+          colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepOrange),
+        ),
         home: MyHomePage(),
       ),
     );
@@ -28,7 +38,6 @@ class MyApp extends StatelessWidget {
 
 class MyAppState extends ChangeNotifier {
   var current = WordPair.random();
-
   var favorites = <WordPair>[];
 
   void getNext() {
@@ -36,7 +45,7 @@ class MyAppState extends ChangeNotifier {
     notifyListeners();
   }
 
-  void toggleFavorite() { 
+  void toggleFavorite() {
     if (favorites.contains(current)) {
       favorites.remove(current);
     } else {
@@ -51,7 +60,6 @@ class MyAppState extends ChangeNotifier {
   }
 }
 
-
 class MyHomePage extends StatefulWidget {
   @override
   State<MyHomePage> createState() => _MyHomePageState();
@@ -61,41 +69,74 @@ class _MyHomePageState extends State<MyHomePage> {
   var selectedIndex = 0;
 
   @override
+  void initState() {
+    print("Servus");
+    super.initState();
+    // Initialize BLE permissions
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final coordinator = context.read<AppCoordinator>();
+      print("Initializing BLE coordinator...");
+      coordinator.initialize();
+    });
+  }
+
+  @override
   Widget build(BuildContext context) {
-    Widget page = selectedIndex == 0 ? GeneratorPage() : selectedIndex == 1 ? FavoritesPage() : selectedIndex == 2 ? BluetoothPage() : Text('Unknown');
-    return LayoutBuilder(
-      builder: (context, constraints) {
-        var hasEnoughSpace = constraints.maxWidth >= 600;
-        return Scaffold(
-          body: Row(
-            children: [
-              SafeArea(
-                child: NavigationRail(
-                  extended: hasEnoughSpace,
-                  destinations: [
-                    NavigationRailDestination(icon: Icon(Icons.home), label: Text('Home')),
-                    NavigationRailDestination(icon: Icon(Icons.favorite), label: Text('Favorites')),
-                    NavigationRailDestination(icon: Icon(Icons.bluetooth), label: Text('Bluetooth'))
-                  ],
-                  selectedIndex: selectedIndex,
-                  onDestinationSelected: (value) {
-                    setState(() {
-                      selectedIndex = value;
-                    });
-                  },
-                ),
+    Widget page;
+    switch (selectedIndex) {
+      case 0:
+        page = GeneratorPage();
+        break;
+      case 1:
+        page = FavoritesPage();
+        break;
+      case 2:
+        page = BluetoothPage();
+        break;
+      default:
+        page = Text('Unknown');
+    }
+
+    return LayoutBuilder(builder: (context, constraints) {
+      var hasEnoughSpace = constraints.maxWidth >= 600;
+      return Scaffold(
+        body: Row(
+          children: [
+            SafeArea(
+              child: NavigationRail(
+                extended: hasEnoughSpace,
+                destinations: [
+                  NavigationRailDestination(
+                    icon: Icon(Icons.home),
+                    label: Text('Home'),
+                  ),
+                  NavigationRailDestination(
+                    icon: Icon(Icons.favorite),
+                    label: Text('Favorites'),
+                  ),
+                  NavigationRailDestination(
+                    icon: Icon(Icons.bluetooth),
+                    label: Text('Bluetooth'),
+                  ),
+                ],
+                selectedIndex: selectedIndex,
+                onDestinationSelected: (value) {
+                  setState(() {
+                    selectedIndex = value;
+                  });
+                },
               ),
-              Expanded(
-                child: Container(
-                  color: Theme.of(context).colorScheme.primaryContainer,
-                  child: page,
-                ),
+            ),
+            Expanded(
+              child: Container(
+                color: Theme.of(context).colorScheme.primaryContainer,
+                child: page,
               ),
-            ],
-          ),
-        );
-      }
-    );
+            ),
+          ],
+        ),
+      );
+    });
   }
 }
 
@@ -149,7 +190,9 @@ class FavoritesPage extends StatelessWidget {
     var appState = context.watch<MyAppState>();
     var favorites = appState.favorites;
 
-    var title = favorites.isNotEmpty ? 'You have ${appState.favorites.length} favorites:' : 'No favorites yet';
+    var title = favorites.isNotEmpty
+        ? 'You have ${appState.favorites.length} favorites:'
+        : 'No favorites yet';
 
     return ListView(
       children: [
@@ -161,13 +204,10 @@ class FavoritesPage extends StatelessWidget {
           ListTile(
             leading: Icon(Icons.favorite),
             title: Text(pair.asLowerCase),
-            onTap: () => {
-              appState.removeFavorite(pair)
-            },  
+            onTap: () => {appState.removeFavorite(pair)},
           ),
       ],
     );
-
   }
 }
 
@@ -196,28 +236,7 @@ class BigName extends StatelessWidget {
   }
 }
 
-// Models for paired devices and messages
-class PairedDevice {
-  final String uuid;
-  final String name;
-  final Peripheral? peripheral;
-  
-  PairedDevice({required this.uuid, required this.name, this.peripheral});
-}
-
-class ChatMessage {
-  final String text;
-  final DateTime timestamp;
-  final bool isSentByMe;
-  bool isDelivered;
-  
-  ChatMessage({
-    required this.text,
-    required this.timestamp,
-    required this.isSentByMe,
-    this.isDelivered = false,
-  });
-}
+// ==================== Bluetooth Page ====================
 
 class BluetoothPage extends StatefulWidget {
   @override
@@ -225,589 +244,365 @@ class BluetoothPage extends StatefulWidget {
 }
 
 class _BluetoothPageState extends State<BluetoothPage> {
-  final CentralManager _central;
-  final PeripheralManager _peripheral;
-  List<DiscoveredEventArgs> _scanResults = [];
-  List<PairedDevice> _pairedDevices = [];
-  Map<String, List<ChatMessage>> _chats = {}; // uuid -> messages
-  bool _isScanning = false;
-  bool _isAdvertising = false;
-  late final GATTService service;
-  late final Advertisement advertisement;
-  
-  late final StreamSubscription<DiscoveredEventArgs> _scanSubscription;
-  late final StreamSubscription _centralManagerStateChangedSubscription;
-  late final StreamSubscription _peripheralManagerStateChangedSubscription;
-  late final StreamSubscription _readRequestedSubscription;
-  late final StreamSubscription _writeRequestedSubscription;
-  late final StreamSubscription _peripheralConnectionStateChangedSubscription; // this is for the device who was paired with
-  late final StreamSubscription _centralConnectionStateChangedSubscription; // this is for the device who initiated the pairing
-  late final deviceName = 'Voyager2';
+  Timer? _scanTimer;
 
-  _BluetoothPageState():  _central = CentralManager(), _peripheral = PeripheralManager() {
-    _centralManagerStateChangedSubscription = _central.stateChanged.listen((eventArgs) async {
-            if (eventArgs.state == BluetoothLowEnergyState.unauthorized &&
-                Platform.isAndroid) {
-              await _central.authorize();
-            }
-          });
-    _peripheralManagerStateChangedSubscription = _peripheral.stateChanged.listen((eventArgs) async {
-            if (eventArgs.state == BluetoothLowEnergyState.unauthorized &&
-                Platform.isAndroid) {
-              await _peripheral.authorize();
-            }
-          });
-    _scanSubscription = _central.discovered.listen((eventArgs) {
-            final peripheral = eventArgs.peripheral;
-            final index = _scanResults.indexWhere((i) => i.peripheral == peripheral);
-            if (eventArgs.advertisement.name == null || eventArgs.advertisement.name!.isEmpty) {
-              return; // skip unnamed devices
-            }
-            print("Discovered device: ${eventArgs.advertisement.name} (${peripheral.uuid}), RSSI: ${eventArgs.rssi}");
-            var newResults = List<DiscoveredEventArgs>.from(_scanResults);
-            if (index < 0) {
-              newResults.add(eventArgs);
-            } else {
-              newResults[index] = eventArgs;
-            }
-            setState(() {
-              _scanResults = newResults;
-            });
-      });
-    _centralConnectionStateChangedSubscription = _central.connectionStateChanged.listen((eventArgs) {
-      final peripheral = eventArgs.peripheral;
-      final peripheralUuid = peripheral.uuid.toString();
-      print("Connection state changed: ${eventArgs.state} for device $peripheralUuid");
-      
-      if (eventArgs.state == ConnectionState.connected) {
-        print("Peripheral device connected: $peripheralUuid");
-        
-        // Check if already paired
-        if (_pairedDevices.any((d) => d.uuid == peripheralUuid)) {
-          print("Device already paired: $peripheralUuid");
-          return;
-        }
-
-        // Add the device to paired devices
-        setState(() {
-          _pairedDevices.add(PairedDevice(
-            uuid: peripheralUuid,
-            name: 'TODO',
-            peripheral: null,
-          ));
-          _chats[peripheralUuid] = [];
-        });
-      } else if (eventArgs.state == ConnectionState.disconnected) {
-        print("Peripheral device disconnected: $peripheralUuid");
-      }
-    });
-    _peripheralConnectionStateChangedSubscription = _peripheral.connectionStateChanged.listen((eventArgs) {
-      final central = eventArgs.central;
-      final centralUuid = central.uuid.toString();
-      print("Connection state changed: ${eventArgs.state} for device $centralUuid");
-      
-      if (eventArgs.state == ConnectionState.connected) {
-        print("Central device connected: $centralUuid");
-        
-        // Check if already paired
-        if (_pairedDevices.any((d) => d.uuid == centralUuid)) {
-          print("Device already paired: $centralUuid");
-          return;
-        }
-        
-        // Add the device to paired devices
-        setState(() {
-          _pairedDevices.add(PairedDevice(
-            uuid: centralUuid,
-            name: 'TODO',
-            peripheral: null,
-          ));
-          _chats[centralUuid] = [];
-        });
-      } else if (eventArgs.state == ConnectionState.disconnected) {
-        print("Central device disconnected: $centralUuid");
-      }
-    });
-    _readRequestedSubscription = _peripheral.characteristicReadRequested.listen((eventArgs) {
-      print("Read requested for characteristic: ${eventArgs.characteristic.uuid}");
-      final request = eventArgs.request;
-      final centralUuid = eventArgs.central.uuid.toString();
-      
-      // Only respond to paired devices
-      if (!_pairedDevices.any((d) => d.uuid == centralUuid)) {
-        print("Ignoring read request from unpaired device: $centralUuid");
-        return;
-      }
-      
-      // Respond with empty data for now
-      _peripheral.respondReadRequestWithValue(
-        request,
-        value: Uint8List.fromList([]),
-      );
-    });
-    _writeRequestedSubscription = _peripheral.characteristicWriteRequested.listen((eventArgs) {
-      print("Write requested for characteristic: ${eventArgs.characteristic.uuid}");
-      final request = eventArgs.request;
-      final centralUuid = eventArgs.central.uuid.toString();
-      
-      // Only respond to paired devices for regular messages
-      if (!_pairedDevices.any((d) => d.uuid == centralUuid)) {
-        print("Ignoring write request from unpaired device: $centralUuid");
-        return;
-      }
-      
-      // If this is characteristic 201 (our messaging characteristic)
-      if (eventArgs.characteristic.uuid == UUID.short(201)) {
-        final messageText = String.fromCharCodes(request.value);
-        print("Received message: $messageText");
-        
-        // Add received message to chat
-        setState(() {
-          final message = ChatMessage(
-            text: messageText,
-            timestamp: DateTime.now(),
-            isSentByMe: false,
-          );
-          _chats[centralUuid]?.add(message);
-        });
-        
-        // Respond to the write request with success
-        _peripheral.respondWriteRequest(request);
-      }
-    });
-  }
-
-  bool get isScanning => _isScanning;
-  bool get isAdvertising => _isAdvertising;
-  BluetoothLowEnergyState get state => _central.state;
-  List<DiscoveredEventArgs> get scanResults => _scanResults;
-
-  Future<void> showAppSettings() async {
-    await _central.showAppSettings();
-  }
-
-  Future<void> startScan({List<UUID>? serviceUUIDs}) async {
-    print("Starting scan");
-    if (_isScanning) {
-      print("Already scanning, cannot start another scan");
-      return; // if scanning, dont do anything
-    }
-
-    print("Scanning...");
-    setState(() {
-      _scanResults.clear();
-      _isScanning = true;
-    });
-
-    await _central.startDiscovery(serviceUUIDs: serviceUUIDs);
-    Timer(Duration(seconds: 10), () {
-        print('Done scanning');
-        stopScan();
-      }
-    );
-  }
-
-  Future<void> stopScan() async {
-    if (!_isScanning) {
-      return;
-    }
-    await _central.stopDiscovery();
-    setState(() {
-      _isScanning = false;
-    });
-  }
-
-  Future<void> stopAdvertising() async {
-    if (!_isAdvertising) {
-      return;
-    }
-    
-    // await _readRequestedSubscription.cancel();
-    // await _writeRequestedSubscription.cancel();
-    // await _peripheralConnectionStateChangedSubscription.cancel();
-    
-    await _peripheral.stopAdvertising();
-    setState(() {
-      _isAdvertising = false;
-    });
-  }
-
-  Future<void> pairDevice(DiscoveredEventArgs deviceArgs) async {
-    final device = deviceArgs.peripheral;
-    final deviceName = deviceArgs.advertisement.name ?? 'Unknown Device';
-    final deviceUuid = device.uuid.toString();
-    
-    // Check if already paired
-    if (_pairedDevices.any((d) => d.uuid == deviceUuid)) {
-      print("Device already paired: $deviceName");
-      return;
-    }
-    
-    print("Attempting to connect to $deviceName...");
-    await _central.connect(device);
-    print("Executed connect to $deviceName, waiting for connection change...");
-    
-    // // Discover services
-    // await _central.discoverGATT(device);
-    // print("Discovered GATT services");
-    
-    // // Add to paired devices on this side
-    // setState(() {
-    //   _pairedDevices.add(PairedDevice(
-    //     uuid: deviceUuid,
-    //     name: deviceName,
-    //     peripheral: device,
-    //   ));
-    //   _chats[deviceUuid] = [];
-    // });
-    
-    // print("Successfully paired with $deviceName");
-  }
-
-  Future<void> sendMessage(String deviceUuid, String messageText) async {
-    final device = _pairedDevices.firstWhere((d) => d.uuid == deviceUuid);
-    if (device.peripheral == null) return;
-    
-    final message = ChatMessage(
-      text: messageText,
-      timestamp: DateTime.now(),
-      isSentByMe: true,
-    );
-    
-    setState(() {
-      _chats[deviceUuid]?.add(message);
-    });
-    
-    try {
-      // Write message to characteristic 201
-      final characteristic = GATTCharacteristic.mutable(
-        uuid: UUID.short(201),
-        properties: [GATTCharacteristicProperty.write],
-        permissions: [GATTCharacteristicPermission.write],
-        descriptors: [],
-      );
-      
-      final messageBytes = Uint8List.fromList(messageText.codeUnits);
-      await _central.writeCharacteristic(
-        device.peripheral!,
-        characteristic,
-        value: messageBytes,
-        type: GATTCharacteristicWriteType.withResponse,
-      );
-      
-      // Mark as delivered
-      setState(() {
-        message.isDelivered = true;
-      });
-      print("Message sent and acknowledged");
-    } catch (e) {
-      print("Error sending message: $e");
-    }
-  }
-
-  void openChatWindow(String deviceUuid) {
-    final device = _pairedDevices.firstWhere((d) => d.uuid == deviceUuid);
-    Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (context) => ChatPage(
-          device: device,
-          messages: _chats[deviceUuid] ?? [],
-          onSendMessage: (text) => sendMessage(deviceUuid, text),
-        ),
-      ),
-    );
-  }
-
-  Future<void> startAdvertising() async {
-    if (_isAdvertising) {
-      return;
-    }
-    if (_isScanning) {
-      await stopScan();
-    }
-    
-    await _peripheral.stopAdvertising();
-
-    await _peripheral.removeAllServices();
-    await _peripheral.addService(service);
-
-    await _peripheral.startAdvertising(advertisement);
-
-    setState(() {
-      _isAdvertising = true;
-    });
-  }
-  
   @override
   void initState() {
     super.initState();
 
-    var elements = List.generate(100, (i) => i % 256);
-    var value = Uint8List.fromList(elements);
-    var s = GATTService(
-      uuid: UUID.short(100),
-      isPrimary: true,
-      includedServices: [],
-      characteristics: [
-        GATTCharacteristic.immutable(
-          uuid: UUID.short(200),
-          value: value,
-          descriptors: [],
-        ),
-        GATTCharacteristic.mutable(
-          uuid: UUID.short(201),
-          properties: [
-            GATTCharacteristicProperty.read,
-            GATTCharacteristicProperty.write,
-            GATTCharacteristicProperty.writeWithoutResponse,
-            GATTCharacteristicProperty.notify,
-            GATTCharacteristicProperty.indicate,
-          ],
-          permissions: [
-            GATTCharacteristicPermission.read,
-            GATTCharacteristicPermission.write,
-          ],
-          descriptors: [],
-        ),
-      ],
-    );
-    var ad = Advertisement(
-      name: deviceName,
-      manufacturerSpecificData:
-          Platform.isIOS || Platform.isMacOS
-              ? []
-              : [
-                ManufacturerSpecificData( // should contain PK: ES25519 is 32 bytes; this field typically has 26 bytes available
-                  id: 0x2e19,
-                  data: Uint8List.fromList([0x01, 0x02, 0x03]),
-                ),
-              ],
-    );
-
-    setState(() {
-      _scanResults = [];
-      _isScanning = false;
-      _isAdvertising = false;
-      service = s;
-      advertisement = ad;
+    // Setup friend request callback
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final coordinator = context.read<AppCoordinator>();
+      coordinator.onFriendRequestReceived = _handleFriendRequest;
     });
   }
 
   @override
   void dispose() {
-    _centralManagerStateChangedSubscription.cancel();
-    _peripheralManagerStateChangedSubscription.cancel();
-    _scanSubscription.cancel();
-    _readRequestedSubscription.cancel();
-    _writeRequestedSubscription.cancel();
-    _centralConnectionStateChangedSubscription.cancel();
-    _peripheralConnectionStateChangedSubscription.cancel();
+    _scanTimer?.cancel();
     super.dispose();
+  }
+
+  void _handleFriendRequest(Peer requester) {
+    showDialog(
+      context: context,
+      builder: (context) => FriendRequestDialog(requester: requester),
+    );
+  }
+
+  Future<void> _toggleScan() async {
+    final coordinator = context.read<AppCoordinator>();
+
+    if (coordinator.isScanning) {
+      await coordinator.stopScan();
+      _scanTimer?.cancel();
+    } else {
+      await coordinator.startScan();
+
+      // Auto-stop after 10 seconds
+      _scanTimer = Timer(Duration(seconds: 10), () {
+        if (mounted) {
+          coordinator.stopScan();
+        }
+      });
+    }
+  }
+
+  Future<void> _toggleAdvertising() async {
+    final coordinator = context.read<AppCoordinator>();
+
+    if (coordinator.isAdvertising) {
+      await coordinator.stopAdvertising();
+    } else {
+      await coordinator.startAdvertising();
+    }
   }
 
   @override
   Widget build(BuildContext context) {
+    final coordinator = context.watch<AppCoordinator>();
+
     return Scaffold(
       appBar: AppBar(
-        title: Text('BLE Scanner'),
+        title: Text('Grassroots BLE'),
         backgroundColor: Theme.of(context).colorScheme.primaryContainer,
+        actions: [
+          // Privacy level indicator (tappable to open settings)
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+            child: Center(
+              child: ActionChip(
+                label: Text(coordinator.privacyLevelName),
+                avatar: Icon(Icons.shield, size: 18),
+                onPressed: () {
+                  Navigator.of(context).push(
+                    MaterialPageRoute(
+                      builder: (context) => SettingsPage(),
+                    ),
+                  );
+                },
+              ),
+            ),
+          ),
+          // Settings button
+          IconButton(
+            icon: Icon(Icons.settings),
+            onPressed: () {
+              Navigator.of(context).push(
+                MaterialPageRoute(
+                  builder: (context) => SettingsPage(),
+                ),
+              );
+            },
+          ),
+        ],
       ),
       body: Column(
         children: [
-          // Paired devices list
-          if (_pairedDevices.isNotEmpty)
+          // Friends section
+          if (coordinator.friends.isNotEmpty)
             Container(
               padding: const EdgeInsets.all(16.0),
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Text(
-                    'Paired Devices',
+                    'Friends (${coordinator.friends.length})',
                     style: TextStyle(
                       fontSize: 18,
                       fontWeight: FontWeight.bold,
                     ),
                   ),
                   SizedBox(height: 8),
-                  ..._pairedDevices.map((device) => Card(
-                    child: ListTile(
-                      title: Text(device.name),
-                      subtitle: Text(device.uuid),
-                      trailing: IconButton(
-                        icon: Icon(Icons.chat),
-                        onPressed: () => openChatWindow(device.uuid),
-                      ),
-                    ),
-                  )),
+                  ...coordinator.friends.map((friend) => Card(
+                        child: ListTile(
+                          leading: CircleAvatar(
+                            child: Text(friend.displayName[0].toUpperCase()),
+                          ),
+                          title: Text(friend.displayName),
+                          subtitle: Text(
+                            '${friend.peerIdHex.substring(0, 16)}...',
+                            style: TextStyle(fontFamily: 'monospace'),
+                          ),
+                          trailing: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              if (friend.isVerified)
+                                Icon(Icons.verified, color: Colors.green, size: 16),
+                              SizedBox(width: 8),
+                              IconButton(
+                                icon: Icon(Icons.chat),
+                                onPressed: () => _openChat(friend),
+                              ),
+                            ],
+                          ),
+                        ),
+                      )),
                 ],
               ),
             ),
-          
-          // Scan and Advertise buttons
+
+          // Scan/Advertise controls
           Padding(
             padding: const EdgeInsets.all(16.0),
             child: Row(
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
-              Expanded(
-                child: ElevatedButton.icon(
-                  onPressed: _isScanning ? stopScan : startScan,
-                  icon: Icon(_isScanning ? Icons.stop : Icons.search),
-                  label: Text('Scan'),
-                ),
-              ),
-              SizedBox(width: 8),
-              Expanded(
-                child: ElevatedButton.icon(
-                  onPressed: _isAdvertising ? stopAdvertising : startAdvertising,
-                  icon: Icon(_isAdvertising ? Icons.stop : Icons.broadcast_on_home),
-                  label: Text('Advertise'),
-                ),
-              ),
-            ],
-          )),
-          
-          // Discovered devices list
-          Expanded(
-            child: ListView.builder(
-              itemCount: _scanResults.length,
-              itemBuilder: (context, index) {
-                final result = _scanResults[index];
-                final deviceUuid = result.peripheral.uuid.toString();
-                final isPaired = _pairedDevices.any((d) => d.uuid == deviceUuid);
-                
-                return ListTile(
-                  title: Text(result.advertisement.name ?? 'Unknown Device'),
-                  subtitle: Text(result.peripheral.uuid.toString()),
-                  trailing: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Text('${result.rssi} dBm'),
-                      SizedBox(width: 8),
-                      if (!isPaired)
-                        ElevatedButton.icon(
-                          onPressed: () => pairDevice(result),
-                          icon: Icon(Icons.link, size: 16),
-                          label: Text('Pair'),
-                          style: ElevatedButton.styleFrom(
-                            padding: EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                          ),
-                        )
-                      else
-                        Icon(Icons.check_circle, color: Colors.green),
-                    ],
+                Expanded(
+                  child: ElevatedButton.icon(
+                    onPressed: _toggleScan,
+                    icon: Icon(
+                      coordinator.isScanning ? Icons.stop : Icons.search,
+                    ),
+                    label: Text(coordinator.isScanning ? 'Stop Scan' : 'Scan'),
                   ),
-                );
-              },
+                ),
+                SizedBox(width: 8),
+                Expanded(
+                  child: ElevatedButton.icon(
+                    onPressed: _toggleAdvertising,
+                    icon: Icon(
+                      coordinator.isAdvertising
+                          ? Icons.stop
+                          : Icons.broadcast_on_home,
+                    ),
+                    label: Text(
+                      coordinator.isAdvertising
+                          ? 'Stop Advertise'
+                          : 'Advertise',
+                    ),
+                  ),
+                ),
+              ],
             ),
+          ),
+
+          // Discovered devices
+          Expanded(
+            child: coordinator.scanResults.isEmpty
+                ? Center(
+                    child: Text(
+                      coordinator.isScanning
+                          ? 'Scanning...'
+                          : 'No devices found',
+                      style: TextStyle(color: Colors.grey),
+                    ),
+                  )
+                : ListView.builder(
+                    itemCount: coordinator.scanResults.length,
+                    itemBuilder: (context, index) {
+                      final result = coordinator.scanResults[index];
+                      final deviceName =
+                          result.advertisement.name ?? 'Unknown Device';
+                      final deviceUuid = result.peripheral.uuid.toString();
+
+                      // Check if already friends
+                      final isFriend = coordinator.friends.any(
+                        (f) => f.peripheral?.uuid.toString() == deviceUuid,
+                      );
+
+                      return ListTile(
+                        title: Text(deviceName),
+                        subtitle: Text(deviceUuid),
+                        trailing: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Text('${result.rssi} dBm'),
+                            SizedBox(width: 8),
+                            if (!isFriend)
+                              ElevatedButton.icon(
+                                onPressed: () => _pairDevice(result),
+                                icon: Icon(Icons.link, size: 16),
+                                label: Text('Pair'),
+                                style: ElevatedButton.styleFrom(
+                                  padding: EdgeInsets.symmetric(
+                                    horizontal: 8,
+                                    vertical: 4,
+                                  ),
+                                ),
+                              )
+                            else
+                              Icon(Icons.check_circle, color: Colors.green),
+                          ],
+                        ),
+                      );
+                    },
+                  ),
           ),
         ],
       ),
     );
   }
+
+  void _pairDevice(dynamic deviceArgs) async {
+    final coordinator = context.read<AppCoordinator>();
+    await coordinator.pairDevice(deviceArgs);
+  }
+
+  void _openChat(Peer friend) {
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (context) => ChatPage(friend: friend),
+      ),
+    );
+  }
 }
 
-// Chat page for messaging with a paired device
+// ==================== Friend Request Dialog ====================
+
+class FriendRequestDialog extends StatelessWidget {
+  final Peer requester;
+
+  const FriendRequestDialog({Key? key, required this.requester})
+      : super(key: key);
+
+  @override
+  Widget build(BuildContext context) {
+    final coordinator = context.read<AppCoordinator>();
+
+    return AlertDialog(
+      title: Text('Friend Request'),
+      content: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text('${requester.displayName} wants to be friends'),
+          SizedBox(height: 8),
+          Text(
+            'Peer ID: ${requester.peerIdHex.substring(0, 16)}...',
+            style: TextStyle(
+              fontFamily: 'monospace',
+              fontSize: 12,
+              color: Colors.grey,
+            ),
+          ),
+        ],
+      ),
+      actions: [
+        TextButton(
+          onPressed: () {
+            coordinator.rejectFriendRequest(requester);
+            Navigator.of(context).pop();
+          },
+          child: Text('Reject'),
+        ),
+        ElevatedButton(
+          onPressed: () {
+            coordinator.acceptFriendRequest(requester);
+            Navigator.of(context).pop();
+          },
+          child: Text('Accept'),
+        ),
+      ],
+    );
+  }
+}
+
+// ==================== Chat Page ====================
+
 class ChatPage extends StatefulWidget {
-  final PairedDevice device;
-  final List<ChatMessage> messages;
-  final Function(String) onSendMessage;
-  
-  ChatPage({
-    required this.device,
-    required this.messages,
-    required this.onSendMessage,
-  });
-  
+  final Peer friend;
+
+  const ChatPage({Key? key, required this.friend}) : super(key: key);
+
   @override
   State<ChatPage> createState() => _ChatPageState();
 }
 
 class _ChatPageState extends State<ChatPage> {
   final TextEditingController _messageController = TextEditingController();
-  
+
   @override
   void dispose() {
     _messageController.dispose();
     super.dispose();
   }
-  
+
   void _sendMessage() {
     final text = _messageController.text.trim();
     if (text.isEmpty) return;
-    
-    widget.onSendMessage(text);
+
+    final coordinator = context.read<AppCoordinator>();
+    coordinator.sendMessage(widget.friend, text);
     _messageController.clear();
   }
-  
+
   @override
   Widget build(BuildContext context) {
+    final coordinator = context.watch<AppCoordinator>();
+    final messages = coordinator.getChat(widget.friend);
+
     return Scaffold(
       appBar: AppBar(
-        title: Text(widget.device.name),
+        title: Text(widget.friend.displayName),
         backgroundColor: Theme.of(context).colorScheme.primaryContainer,
       ),
       body: Column(
         children: [
           Expanded(
-            child: ListView.builder(
-              reverse: true,
-              itemCount: widget.messages.length,
-              itemBuilder: (context, index) {
-                final message = widget.messages[widget.messages.length - 1 - index];
-                final timeStr = '${message.timestamp.hour.toString().padLeft(2, '0')}:${message.timestamp.minute.toString().padLeft(2, '0')}';
-                
-                return Align(
-                  alignment: message.isSentByMe 
-                      ? Alignment.centerRight 
-                      : Alignment.centerLeft,
-                  child: Container(
-                    margin: EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-                    padding: EdgeInsets.all(12),
-                    decoration: BoxDecoration(
-                      color: message.isSentByMe 
-                          ? Colors.blue[100] 
-                          : Colors.grey[300],
-                      borderRadius: BorderRadius.circular(12),
+            child: messages.isEmpty
+                ? Center(
+                    child: Text(
+                      'No messages yet',
+                      style: TextStyle(color: Colors.grey),
                     ),
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.end,
-                      children: [
-                        Text(
-                          message.text,
-                          style: TextStyle(fontSize: 16),
-                        ),
-                        SizedBox(height: 4),
-                        Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Text(
-                              timeStr,
-                              style: TextStyle(
-                                fontSize: 10,
-                                color: Colors.grey[600],
-                              ),
-                            ),
-                            if (message.isSentByMe) ...[
-                              SizedBox(width: 4),
-                              Icon(
-                                message.isDelivered 
-                                    ? Icons.check 
-                                    : Icons.schedule,
-                                size: 12,
-                                color: message.isDelivered 
-                                    ? Colors.blue 
-                                    : Colors.grey,
-                              ),
-                            ],
-                          ],
-                        ),
-                      ],
-                    ),
+                  )
+                : ListView.builder(
+                    reverse: true,
+                    itemCount: messages.length,
+                    itemBuilder: (context, index) {
+                      final message = messages[messages.length - 1 - index];
+                      final isSentByMe = _bytesEqual(
+                        message.senderId,
+                        coordinator.myPeerId,
+                      );
+
+                      return _MessageBubble(
+                        message: message,
+                        isSentByMe: isSentByMe,
+                      );
+                    },
                   ),
-                );
-              },
-            ),
           ),
           Container(
             padding: EdgeInsets.all(8),
@@ -853,5 +648,101 @@ class _ChatPageState extends State<ChatPage> {
         ],
       ),
     );
+  }
+
+  bool _bytesEqual(List<int> a, List<int> b) {
+    if (a.length != b.length) return false;
+    for (int i = 0; i < a.length; i++) {
+      if (a[i] != b[i]) return false;
+    }
+    return true;
+  }
+}
+
+class _MessageBubble extends StatelessWidget {
+  final Message message;
+  final bool isSentByMe;
+
+  const _MessageBubble({
+    required this.message,
+    required this.isSentByMe,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final timeStr =
+        '${message.timestamp.hour.toString().padLeft(2, '0')}:${message.timestamp.minute.toString().padLeft(2, '0')}';
+
+    return Align(
+      alignment: isSentByMe ? Alignment.centerRight : Alignment.centerLeft,
+      child: Container(
+        margin: EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+        padding: EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: isSentByMe ? Colors.blue[100] : Colors.grey[300],
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.end,
+          children: [
+            Text(
+              message.content,
+              style: TextStyle(fontSize: 16),
+            ),
+            SizedBox(height: 4),
+            Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  timeStr,
+                  style: TextStyle(
+                    fontSize: 10,
+                    color: Colors.grey[600],
+                  ),
+                ),
+                if (isSentByMe) ...[
+                  SizedBox(width: 4),
+                  Icon(
+                    _getStatusIcon(),
+                    size: 12,
+                    color: _getStatusColor(),
+                  ),
+                ],
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  IconData _getStatusIcon() {
+    switch (message.status) {
+      case MessageStatus.pending:
+        return Icons.schedule;
+      case MessageStatus.sent:
+        return Icons.check;
+      case MessageStatus.delivered:
+        return Icons.done_all;
+      case MessageStatus.read:
+        return Icons.done_all;
+      default:
+        return Icons.schedule;
+    }
+  }
+
+  Color _getStatusColor() {
+    switch (message.status) {
+      case MessageStatus.pending:
+        return Colors.grey;
+      case MessageStatus.sent:
+        return Colors.grey;
+      case MessageStatus.delivered:
+        return Colors.blue;
+      case MessageStatus.read:
+        return Colors.green;
+      default:
+        return Colors.grey;
+    }
   }
 }
