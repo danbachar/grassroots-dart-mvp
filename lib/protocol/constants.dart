@@ -3,6 +3,14 @@
 // GATT Service/Characteristic UUIDs
 const String FIXED_CHARACTERISTIC_UUID = 'A1B2C3D4-E5F6-4A5B-8C9D-0E1F2A3B4C5D';
 
+// Dedicated characteristic for friend request flow (Central writes requests, subscribes for responses)
+const String FRIEND_REQUEST_CHARACTERISTIC_UUID =
+    'A1B2C3D4-E5F6-4A5B-8C9D-0E1F2A3B4C6D';
+
+// Characteristic for friend responses (Peripheral notifies accept/reject to subscribed Central)
+const String FRIEND_RESPONSE_CHARACTERISTIC_UUID =
+    'A1B2C3D4-E5F6-4A5B-8C9D-0E1F2A3B4C7D';
+
 // Message Types
 class MessageType {
   // Chat messages
@@ -32,23 +40,23 @@ class MessageType {
 
 // Flags
 class PacketFlags {
-  static const int hasRecipient = 1 << 0;  // Bit 0
-  static const int hasSignature = 1 << 1;  // Bit 1
-  static const int isCompressed = 1 << 2;  // Bit 2
-  static const int hasRoute = 1 << 3;      // Bit 3
+  static const int hasRecipient = 1 << 0; // Bit 0
+  static const int hasSignature = 1 << 1; // Bit 1
+  static const int isCompressed = 1 << 2; // Bit 2
+  static const int hasRoute = 1 << 3; // Bit 3
 }
 
 // Timeouts (in milliseconds)
 class Timeouts {
-  static const int connection = 10000;      // 10s
-  static const int handshake = 10000;       // 10s
-  static const int idle = 60000;            // 60s
-  static const int fragment = 30000;        // 30s
-  static const int retryInitial = 2000;     // 2s
-  static const int retryMax = 16000;        // 16s
+  static const int connection = 10000; // 10s
+  static const int handshake = 10000; // 10s
+  static const int idle = 60000; // 60s
+  static const int fragment = 30000; // 30s
+  static const int retryInitial = 2000; // 2s
+  static const int retryMax = 16000; // 16s
   static const int friendCooldown = 300000; // 300s (5 min)
   static const int messageExpiry = 86400000; // 24 hours
-  static const int bloomRotation = 300000;   // 5 min
+  static const int bloomRotation = 300000; // 5 min
 }
 
 // Limits
@@ -60,15 +68,15 @@ class Limits {
   static const int maxFragments = 255;
   static const int defaultTTL = 7;
   static const int bleMTU = 512;
-  static const int rssiThreshold = -50;  // dBm for proximity check
+  static const int rssiThreshold = -50; // dBm for proximity check
 }
 
 // Privacy Levels
 class PrivacyLevel {
-  static const int silent = 1;   // No advertising
-  static const int visible = 2;  // Advertise with UUID only
-  static const int open = 3;     // Advertise with name, scan all
-  static const int social = 4;   // Share friend lists
+  static const int silent = 1; // No advertising
+  static const int visible = 2; // Advertise with UUID only
+  static const int open = 3; // Advertise with name, scan all
+  static const int social = 4; // Share friend lists
 }
 
 // Message Status
