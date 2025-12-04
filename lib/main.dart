@@ -50,7 +50,80 @@ class _MyHomePageState extends State<MyHomePage> {
       final coordinator = context.read<AppCoordinator>();
       print("Initializing BLE coordinator...");
       coordinator.initialize();
+      
+      // Setup notification callback for incoming messages
+      coordinator.onMessageReceived = _handleIncomingMessage;
+      
+      // Setup notification callback for friend acceptance
+      coordinator.onFriendAdded = _handleFriendAdded;
     });
+  }
+
+  void _handleFriendAdded(Peer friend) {
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Row(
+          children: [
+            Icon(Icons.check_circle, color: Colors.white),
+            SizedBox(width: 12),
+            Text('${friend.displayName} is now your friend!'),
+          ],
+        ),
+        backgroundColor: Colors.green,
+        duration: Duration(seconds: 3),
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+  }
+
+  void _handleIncomingMessage(Message message, Peer sender) {
+    // Show a notification banner
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Row(
+          children: [
+            CircleAvatar(
+              radius: 16,
+              backgroundColor: Colors.white,
+              child: Text(
+                sender.displayName[0].toUpperCase(),
+                style: TextStyle(color: Colors.deepOrange, fontWeight: FontWeight.bold),
+              ),
+            ),
+            SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Text(
+                    sender.displayName,
+                    style: TextStyle(fontWeight: FontWeight.bold),
+                  ),
+                  Text(
+                    message.content,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        duration: Duration(seconds: 4),
+        behavior: SnackBarBehavior.floating,
+        action: SnackBarAction(
+          label: 'Open',
+          textColor: Colors.white,
+          onPressed: () {
+            // Navigate to chat
+            Navigator.of(context).push(
+              MaterialPageRoute(builder: (context) => ChatPage(friend: sender)),
+            );
+          },
+        ),
+      ),
+    );
   }
 
   @override
@@ -373,6 +446,8 @@ class _ChatListTile extends StatelessWidget {
     final friend = summary.friend;
     final lastMessage = summary.lastMessage;
     final isInRange = coordinator.isFriendInRange(friend);
+    final hasUnread = coordinator.hasUnreadMessages(friend);
+    final unreadCount = coordinator.getUnreadCount(friend);
 
     // Format time
     String timeStr = '';
@@ -498,13 +573,32 @@ class _ChatListTile extends StatelessWidget {
                         child: Text(
                           messagePreview,
                           style: TextStyle(
-                            color: Colors.grey.shade600,
+                            color: hasUnread ? Colors.black87 : Colors.grey.shade600,
                             fontSize: 14,
+                            fontWeight: hasUnread ? FontWeight.bold : FontWeight.normal,
                           ),
                           maxLines: 1,
                           overflow: TextOverflow.ellipsis,
                         ),
                       ),
+                      if (hasUnread && unreadCount > 0) ...[
+                        SizedBox(width: 8),
+                        Container(
+                          padding: EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: Theme.of(context).colorScheme.primary,
+                            borderRadius: BorderRadius.circular(12),
+                          ),
+                          child: Text(
+                            unreadCount.toString(),
+                            style: TextStyle(
+                              color: Colors.white,
+                              fontSize: 12,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ),
+                      ],
                     ],
                   ),
                 ],
@@ -687,34 +781,101 @@ class _BluetoothPageState extends State<BluetoothPage> {
                           result.advertisement.name ?? 'Unknown Device';
                       final deviceUuid = result.peripheral.uuid.toString();
 
-                      // Check if already friends
-                      final isFriend = coordinator.friends.any(
-                        (f) => f.peripheral?.uuid.toString() == deviceUuid,
-                      );
+                      // Check if already friends by matching service UUID
+                      Peer? matchedFriend;
+                      for (final friend in coordinator.friends) {
+                        final friendServiceUUID = friend.deriveServiceUUID().toLowerCase();
+                        for (final uuid in result.advertisement.serviceUUIDs) {
+                          if (uuid.toString().toLowerCase() == friendServiceUUID) {
+                            matchedFriend = friend;
+                            break;
+                          }
+                        }
+                        if (matchedFriend != null) break;
+                      }
+                      final isFriend = matchedFriend != null;
+                      
+                      // Check if friend request is pending
+                      final isPending = coordinator.isPendingFriendRequest(deviceUuid);
 
-                      return ListTile(
-                        title: Text(deviceName),
-                        subtitle: Text(deviceUuid),
-                        trailing: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            Text('${result.rssi} dBm'),
-                            SizedBox(width: 8),
-                            if (!isFriend)
-                              ElevatedButton.icon(
-                                onPressed: () => _sendFriendRequest(result),
-                                icon: Icon(Icons.person_add, size: 16),
-                                label: Text('Add Friend'),
-                                style: ElevatedButton.styleFrom(
-                                  padding: EdgeInsets.symmetric(
-                                    horizontal: 8,
-                                    vertical: 4,
+                      return Opacity(
+                        opacity: isPending ? 0.5 : 1.0,
+                        child: ListTile(
+                          title: Text(deviceName),
+                          subtitle: Row(
+                            children: [
+                              Expanded(
+                                child: Text(
+                                  deviceUuid,
+                                  overflow: TextOverflow.ellipsis,
+                                ),
+                              ),
+                              if (isPending)
+                                Padding(
+                                  padding: const EdgeInsets.only(left: 8),
+                                  child: Text(
+                                    'Request sent',
+                                    style: TextStyle(
+                                      color: Colors.orange,
+                                      fontSize: 12,
+                                      fontWeight: FontWeight.w500,
+                                    ),
                                   ),
                                 ),
-                              )
-                            else
-                              Icon(Icons.check_circle, color: Colors.green),
-                          ],
+                            ],
+                          ),
+                          trailing: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text('${result.rssi} dBm'),
+                              SizedBox(width: 8),
+                              if (isFriend)
+                                ElevatedButton.icon(
+                                  onPressed: () => _confirmRemoveFriend(context, matchedFriend!),
+                                  icon: Icon(Icons.person_remove, size: 16),
+                                  label: Text('Remove'),
+                                  style: ElevatedButton.styleFrom(
+                                    backgroundColor: Colors.red,
+                                    foregroundColor: Colors.white,
+                                    padding: EdgeInsets.symmetric(
+                                      horizontal: 8,
+                                      vertical: 4,
+                                    ),
+                                  ),
+                                )
+                              else if (isPending)
+                                ElevatedButton.icon(
+                                  onPressed: null,
+                                  icon: SizedBox(
+                                    width: 16,
+                                    height: 16,
+                                    child: CircularProgressIndicator(
+                                      strokeWidth: 2,
+                                      color: Colors.grey,
+                                    ),
+                                  ),
+                                  label: Text('Pending'),
+                                  style: ElevatedButton.styleFrom(
+                                    padding: EdgeInsets.symmetric(
+                                      horizontal: 8,
+                                      vertical: 4,
+                                    ),
+                                  ),
+                                )
+                              else
+                                ElevatedButton.icon(
+                                  onPressed: () => _sendFriendRequest(result),
+                                  icon: Icon(Icons.person_add, size: 16),
+                                  label: Text('Add Friend'),
+                                  style: ElevatedButton.styleFrom(
+                                    padding: EdgeInsets.symmetric(
+                                      horizontal: 8,
+                                      vertical: 4,
+                                    ),
+                                  ),
+                                ),
+                            ],
+                          ),
                         ),
                       );
                     },
@@ -728,6 +889,43 @@ class _BluetoothPageState extends State<BluetoothPage> {
   void _sendFriendRequest(dynamic deviceArgs) async {
     final coordinator = context.read<AppCoordinator>();
     await coordinator.sendFriendRequest(deviceArgs);
+  }
+
+  void _confirmRemoveFriend(BuildContext context, Peer friend) {
+    final coordinator = context.read<AppCoordinator>();
+    
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('Remove Friend'),
+        content: Text(
+          'Are you sure you want to remove ${friend.displayName} from your friends list?',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              coordinator.removeFriend(friend);
+              Navigator.of(context).pop();
+              ScaffoldMessenger.of(this.context).showSnackBar(
+                SnackBar(
+                  content: Text('${friend.displayName} removed from friends'),
+                  duration: Duration(seconds: 2),
+                ),
+              );
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.red,
+              foregroundColor: Colors.white,
+            ),
+            child: Text('Remove'),
+          ),
+        ],
+      ),
+    );
   }
 }
 
@@ -794,23 +992,23 @@ class ChatPage extends StatefulWidget {
 
 class _ChatPageState extends State<ChatPage> {
   final TextEditingController _messageController = TextEditingController();
+  late final AppCoordinator _coordinator;
 
   @override
   void initState() {
     super.initState();
     // Set active chat and mark messages as read when chat is opened
     WidgetsBinding.instance.addPostFrameCallback((_) {
-      final coordinator = context.read<AppCoordinator>();
-      coordinator.setActiveChat(widget.friend);
-      coordinator.markMessagesAsRead(widget.friend);
+      _coordinator = context.read<AppCoordinator>();
+      _coordinator.setActiveChat(widget.friend);
+      _coordinator.markMessagesAsRead(widget.friend);
     });
   }
 
   @override
   void dispose() {
-    // Clear active chat when leaving
-    final coordinator = context.read<AppCoordinator>();
-    coordinator.setActiveChat(null);
+    // Clear active chat when leaving - use stored reference since context may be invalid
+    _coordinator.setActiveChat(null);
     _messageController.dispose();
     super.dispose();
   }

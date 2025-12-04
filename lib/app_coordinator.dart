@@ -80,6 +80,11 @@ class AppCoordinator extends ChangeNotifier {
 
   // Callbacks for UI
   void Function(Peer)? onFriendRequestReceived;
+  void Function(Message, Peer)? onMessageReceived;  // For notifications
+  void Function(Peer)? onFriendAdded;  // Called when a friend request is accepted (for snackbar)
+
+  // Track pending outgoing friend requests (peripheral UUID -> true)
+  final Set<String> _pendingOutgoingRequests = {};
 
   // Track currently open chat for immediate read receipts
   Uint8List? _activeChatPeerId;
@@ -154,6 +159,14 @@ class AppCoordinator extends ChangeNotifier {
   // ==================== Getters ====================
 
   List<Peer> get friends => _friendshipService.friends;
+  
+  /// Get set of peripheral UUIDs with pending friend requests
+  Set<String> get pendingOutgoingRequests => Set.unmodifiable(_pendingOutgoingRequests);
+  
+  /// Check if a friend request is pending for a specific peripheral
+  bool isPendingFriendRequest(String peripheralId) {
+    return _pendingOutgoingRequests.contains(peripheralId);
+  }
   
   /// Get scan results filtered to only show compatible Grassroots devices
   List<DiscoveredEventArgs> get scanResults {
@@ -349,6 +362,10 @@ class AppCoordinator extends ChangeNotifier {
 
     // Store pending operation
     _pendingFriendRequests[peripheralId] = deviceArgs;
+    
+    // Track as pending outgoing request (for UI to show greyed out state)
+    _pendingOutgoingRequests.add(peripheralId);
+    notifyListeners();
 
     // Connect via BLE (rest happens in _handleConnectionChanged)
     await _bleManager.connect(peripheral);
@@ -494,6 +511,25 @@ class AppCoordinator extends ChangeNotifier {
   /// Get chat history with a peer
   List<Message> getChat(Peer peer) {
     return _messageService.getChat(peer.peerId);
+  }
+
+  /// Count unread messages from a specific peer
+  int getUnreadCount(Peer peer) {
+    final messages = _messageService.getChat(peer.peerId);
+    int count = 0;
+    for (final message in messages) {
+      // Count messages FROM this peer that aren't read yet
+      final isFromPeer = !_bytesEqual(message.senderId, myPeerId);
+      if (isFromPeer && message.status != MessageStatus.read) {
+        count++;
+      }
+    }
+    return count;
+  }
+
+  /// Check if there are any unread messages from a peer
+  bool hasUnreadMessages(Peer peer) {
+    return getUnreadCount(peer) > 0;
   }
 
   /// Mark all messages from a peer as read (when user opens the chat)
@@ -1049,6 +1085,25 @@ class AppCoordinator extends ChangeNotifier {
         case MessageType.friendAccept:
           final friend = _friendshipService.handleFriendAccept(packet);
           print('Friend request accepted by ${friend.displayName}');
+          
+          // Clear pending request for this friend (find by service UUID match)
+          final acceptedServiceUUID = friend.deriveServiceUUID().toLowerCase();
+          String? matchingPeripheralId;
+          for (final entry in _deviceCache.entries) {
+            for (final uuid in entry.value.device.advertisement.serviceUUIDs) {
+              if (uuid.toString().toLowerCase() == acceptedServiceUUID) {
+                matchingPeripheralId = entry.key;
+                break;
+              }
+            }
+            if (matchingPeripheralId != null) break;
+          }
+          if (matchingPeripheralId != null) {
+            _pendingOutgoingRequests.remove(matchingPeripheralId);
+          }
+          
+          // Notify UI for snackbar
+          onFriendAdded?.call(friend);
           notifyListeners();
           break;
 
@@ -1067,6 +1122,12 @@ class AppCoordinator extends ChangeNotifier {
             print('Chat is open, sending immediate read receipt');
             _messageService.markAsRead(message.messageId);
             _sendReadReceiptForMessage(message);
+          } else {
+            // Chat is not open - notify UI for banner notification
+            final sender = _friendshipService.getFriend(message.senderId);
+            if (sender != null) {
+              onMessageReceived?.call(message, sender);
+            }
           }
           
           notifyListeners();
