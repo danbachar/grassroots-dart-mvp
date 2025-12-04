@@ -16,9 +16,19 @@ public final class GeneratedPluginRegistrant {
   private static final String TAG = "GeneratedPluginRegistrant";
   public static void registerWith(@NonNull FlutterEngine flutterEngine) {
     try {
+      flutterEngine.getPlugins().add(new com.rohit.ble_peripheral.BlePeripheralPlugin());
+    } catch (Exception e) {
+      Log.e(TAG, "Error registering plugin ble_peripheral, com.rohit.ble_peripheral.BlePeripheralPlugin", e);
+    }
+    try {
       flutterEngine.getPlugins().add(new dev.zeekr.bluetooth_low_energy_android.BluetoothLowEnergyAndroidPlugin());
     } catch (Exception e) {
       Log.e(TAG, "Error registering plugin bluetooth_low_energy_android, dev.zeekr.bluetooth_low_energy_android.BluetoothLowEnergyAndroidPlugin", e);
+    }
+    try {
+      flutterEngine.getPlugins().add(new com.baseflow.permissionhandler.PermissionHandlerPlugin());
+    } catch (Exception e) {
+      Log.e(TAG, "Error registering plugin permission_handler_android, com.baseflow.permissionhandler.PermissionHandlerPlugin", e);
     }
   }
 }
