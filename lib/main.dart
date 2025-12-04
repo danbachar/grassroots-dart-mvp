@@ -1,4 +1,3 @@
-import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -153,28 +152,80 @@ class FriendsListPage extends StatelessWidget {
               itemCount: friends.length,
               itemBuilder: (context, index) {
                 final friend = friends[index];
+                final isInRange = coordinator.isFriendInRange(friend);
+
                 return Card(
                   margin: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
                   child: ListTile(
-                    leading: CircleAvatar(
-                      backgroundColor: Theme.of(context).colorScheme.primary,
-                      child: Text(
-                        friend.displayName[0].toUpperCase(),
-                        style: TextStyle(color: Colors.white),
-                      ),
+                    leading: Stack(
+                      children: [
+                        CircleAvatar(
+                          backgroundColor: Theme.of(
+                            context,
+                          ).colorScheme.primary,
+                          child: Text(
+                            friend.displayName[0].toUpperCase(),
+                            style: TextStyle(color: Colors.white),
+                          ),
+                        ),
+                        // In-range indicator (green dot)
+                        if (isInRange)
+                          Positioned(
+                            right: 0,
+                            bottom: 0,
+                            child: Container(
+                              width: 14,
+                              height: 14,
+                              decoration: BoxDecoration(
+                                color: Colors.green,
+                                shape: BoxShape.circle,
+                                border: Border.all(
+                                  color: Colors.white,
+                                  width: 2,
+                                ),
+                              ),
+                            ),
+                          ),
+                      ],
                     ),
                     title: Row(
                       children: [
-                        Text(friend.displayName),
+                        Expanded(child: Text(friend.displayName)),
                         if (friend.isVerified) ...[
                           SizedBox(width: 4),
                           Icon(Icons.verified, color: Colors.green, size: 16),
                         ],
+                        if (isInRange) ...[
+                          SizedBox(width: 4),
+                          Icon(
+                            Icons.bluetooth_connected,
+                            color: Colors.blue,
+                            size: 16,
+                          ),
+                        ],
                       ],
                     ),
-                    subtitle: Text(
-                      '${friend.peerIdHex.substring(0, 16)}...',
-                      style: TextStyle(fontFamily: 'monospace', fontSize: 12),
+                    subtitle: Row(
+                      children: [
+                        Text(
+                          '${friend.peerIdHex.substring(0, 16)}...',
+                          style: TextStyle(
+                            fontFamily: 'monospace',
+                            fontSize: 12,
+                          ),
+                        ),
+                        if (isInRange) ...[
+                          SizedBox(width: 8),
+                          Text(
+                            'In Range',
+                            style: TextStyle(
+                              color: Colors.green,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w500,
+                            ),
+                          ),
+                        ],
+                      ],
                     ),
                     trailing: Row(
                       mainAxisSize: MainAxisSize.min,
@@ -318,9 +369,10 @@ class _ChatListTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final coordinator = context.read<AppCoordinator>();
+    final coordinator = context.watch<AppCoordinator>();
     final friend = summary.friend;
     final lastMessage = summary.lastMessage;
+    final isInRange = coordinator.isFriendInRange(friend);
 
     // Format time
     String timeStr = '';
@@ -369,13 +421,32 @@ class _ChatListTile extends StatelessWidget {
         ),
         child: Row(
           children: [
-            CircleAvatar(
-              radius: 28,
-              backgroundColor: Theme.of(context).colorScheme.primary,
-              child: Text(
-                friend.displayName[0].toUpperCase(),
-                style: TextStyle(color: Colors.white, fontSize: 20),
-              ),
+            Stack(
+              children: [
+                CircleAvatar(
+                  radius: 28,
+                  backgroundColor: Theme.of(context).colorScheme.primary,
+                  child: Text(
+                    friend.displayName[0].toUpperCase(),
+                    style: TextStyle(color: Colors.white, fontSize: 20),
+                  ),
+                ),
+                // In-range indicator (green dot)
+                if (isInRange)
+                  Positioned(
+                    right: 0,
+                    bottom: 0,
+                    child: Container(
+                      width: 16,
+                      height: 16,
+                      decoration: BoxDecoration(
+                        color: Colors.green,
+                        shape: BoxShape.circle,
+                        border: Border.all(color: Colors.white, width: 2),
+                      ),
+                    ),
+                  ),
+              ],
             ),
             SizedBox(width: 12),
             Expanded(
@@ -473,11 +544,11 @@ class _ChatListTile extends StatelessWidget {
       case MessageStatus.pending:
         return Colors.grey;
       case MessageStatus.sent:
-        return Colors.grey;
+        return Colors.green;  // Green single checkmark when sent
       case MessageStatus.delivered:
-        return Colors.blue;
+        return Colors.green;  // Green double checkmark when delivered
       case MessageStatus.read:
-        return Colors.green;
+        return Colors.blue;   // Blue double checkmark when read
       default:
         return Colors.grey;
     }
@@ -492,8 +563,6 @@ class BluetoothPage extends StatefulWidget {
 }
 
 class _BluetoothPageState extends State<BluetoothPage> {
-  Timer? _scanTimer;
-
   @override
   void initState() {
     super.initState();
@@ -505,45 +574,11 @@ class _BluetoothPageState extends State<BluetoothPage> {
     });
   }
 
-  @override
-  void dispose() {
-    _scanTimer?.cancel();
-    super.dispose();
-  }
-
   void _handleFriendRequest(Peer requester) {
     showDialog(
       context: context,
       builder: (context) => FriendRequestDialog(requester: requester),
     );
-  }
-
-  Future<void> _toggleScan() async {
-    final coordinator = context.read<AppCoordinator>();
-
-    if (coordinator.isScanning) {
-      await coordinator.stopScan();
-      _scanTimer?.cancel();
-    } else {
-      await coordinator.startScan();
-
-      // Auto-stop after 10 seconds
-      _scanTimer = Timer(Duration(seconds: 10), () {
-        if (mounted) {
-          coordinator.stopScan();
-        }
-      });
-    }
-  }
-
-  Future<void> _toggleAdvertising() async {
-    final coordinator = context.read<AppCoordinator>();
-
-    if (coordinator.isAdvertising) {
-      await coordinator.stopAdvertising();
-    } else {
-      await coordinator.startAdvertising();
-    }
   }
 
   @override
@@ -552,81 +587,96 @@ class _BluetoothPageState extends State<BluetoothPage> {
 
     return Scaffold(
       appBar: AppBar(
-        title: Text('Grassroots BLE'),
+        title: Text('Nearby Devices'),
         backgroundColor: Theme.of(context).colorScheme.primaryContainer,
         actions: [
-          // Privacy level indicator (tappable to open settings)
+          // Status indicators
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 8),
-            child: Center(
-              child: ActionChip(
-                label: Text(coordinator.privacyLevelName),
-                avatar: Icon(Icons.shield, size: 18),
-                onPressed: () {
-                  Navigator.of(context).push(
-                    MaterialPageRoute(builder: (context) => SettingsPage()),
-                  );
-                },
-              ),
+            child: Row(
+              children: [
+                // Scanning indicator
+                if (coordinator.isScanning)
+                  Padding(
+                    padding: const EdgeInsets.only(right: 8),
+                    child: Row(
+                      children: [
+                        SizedBox(
+                          width: 12,
+                          height: 12,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        ),
+                        SizedBox(width: 4),
+                        Text('Scanning', style: TextStyle(fontSize: 12)),
+                      ],
+                    ),
+                  ),
+                // Advertising indicator
+                if (coordinator.isAdvertising)
+                  Icon(Icons.broadcast_on_home, color: Colors.green, size: 20),
+              ],
             ),
           ),
-          // Settings button
-          IconButton(
-            icon: Icon(Icons.settings),
+          // Privacy level indicator (tappable to open settings)
+          ActionChip(
+            label: Text(coordinator.privacyLevelName),
+            avatar: Icon(Icons.shield, size: 18),
             onPressed: () {
-              Navigator.of(
-                context,
-              ).push(MaterialPageRoute(builder: (context) => SettingsPage()));
+              Navigator.of(context).push(
+                MaterialPageRoute(builder: (context) => SettingsPage()),
+              );
             },
           ),
+          SizedBox(width: 8),
         ],
       ),
       body: Column(
         children: [
-          // Scan/Advertise controls
-          Padding(
-            padding: const EdgeInsets.all(16.0),
+          // Status banner
+          Container(
+            width: double.infinity,
+            padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+            color: coordinator.isScanning ? Colors.blue.shade50 : Colors.grey.shade100,
             child: Row(
-              mainAxisAlignment: MainAxisAlignment.center,
               children: [
-                Expanded(
-                  child: ElevatedButton.icon(
-                    onPressed: _toggleScan,
-                    icon: Icon(
-                      coordinator.isScanning ? Icons.stop : Icons.search,
-                    ),
-                    label: Text(coordinator.isScanning ? 'Stop Scan' : 'Scan'),
-                  ),
+                Icon(
+                  coordinator.isScanning ? Icons.radar : Icons.bluetooth,
+                  size: 16,
+                  color: coordinator.isScanning ? Colors.blue : Colors.grey,
                 ),
                 SizedBox(width: 8),
-                Expanded(
-                  child: ElevatedButton.icon(
-                    onPressed: _toggleAdvertising,
-                    icon: Icon(
-                      coordinator.isAdvertising
-                          ? Icons.stop
-                          : Icons.broadcast_on_home,
-                    ),
-                    label: Text(
-                      coordinator.isAdvertising
-                          ? 'Stop Advertise'
-                          : 'Advertise',
-                    ),
+                Text(
+                  coordinator.isScanning 
+                    ? 'Scanning for nearby Grassroots devices...'
+                    : 'Paused - will resume shortly',
+                  style: TextStyle(
+                    fontSize: 13,
+                    color: coordinator.isScanning ? Colors.blue.shade700 : Colors.grey.shade600,
                   ),
                 ),
               ],
             ),
           ),
 
-          // Discovered devices
+          // Discovered devices (filtered to compatible only)
           Expanded(
             child: coordinator.scanResults.isEmpty
                 ? Center(
-                    child: Text(
-                      coordinator.isScanning
-                          ? 'Scanning...'
-                          : 'No devices found',
-                      style: TextStyle(color: Colors.grey),
+                    child: Column(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Icon(Icons.bluetooth_searching, size: 64, color: Colors.grey),
+                        SizedBox(height: 16),
+                        Text(
+                          'No Grassroots devices found',
+                          style: TextStyle(fontSize: 16, color: Colors.grey),
+                        ),
+                        SizedBox(height: 8),
+                        Text(
+                          'Make sure other devices are running the app',
+                          style: TextStyle(fontSize: 13, color: Colors.grey),
+                        ),
+                      ],
                     ),
                   )
                 : ListView.builder(
@@ -652,9 +702,9 @@ class _BluetoothPageState extends State<BluetoothPage> {
                             SizedBox(width: 8),
                             if (!isFriend)
                               ElevatedButton.icon(
-                                onPressed: () => _pairDevice(result),
-                                icon: Icon(Icons.link, size: 16),
-                                label: Text('Pair'),
+                                onPressed: () => _sendFriendRequest(result),
+                                icon: Icon(Icons.person_add, size: 16),
+                                label: Text('Add Friend'),
                                 style: ElevatedButton.styleFrom(
                                   padding: EdgeInsets.symmetric(
                                     horizontal: 8,
@@ -675,9 +725,9 @@ class _BluetoothPageState extends State<BluetoothPage> {
     );
   }
 
-  void _pairDevice(dynamic deviceArgs) async {
+  void _sendFriendRequest(dynamic deviceArgs) async {
     final coordinator = context.read<AppCoordinator>();
-    await coordinator.pairDevice(deviceArgs);
+    await coordinator.sendFriendRequest(deviceArgs);
   }
 }
 
@@ -746,7 +796,21 @@ class _ChatPageState extends State<ChatPage> {
   final TextEditingController _messageController = TextEditingController();
 
   @override
+  void initState() {
+    super.initState();
+    // Set active chat and mark messages as read when chat is opened
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      final coordinator = context.read<AppCoordinator>();
+      coordinator.setActiveChat(widget.friend);
+      coordinator.markMessagesAsRead(widget.friend);
+    });
+  }
+
+  @override
   void dispose() {
+    // Clear active chat when leaving
+    final coordinator = context.read<AppCoordinator>();
+    coordinator.setActiveChat(null);
     _messageController.dispose();
     super.dispose();
   }
@@ -916,11 +980,11 @@ class _MessageBubble extends StatelessWidget {
       case MessageStatus.pending:
         return Colors.grey;
       case MessageStatus.sent:
-        return Colors.grey;
+        return Colors.green;  // Green single checkmark when sent
       case MessageStatus.delivered:
-        return Colors.blue;
+        return Colors.green;  // Green double checkmark when delivered
       case MessageStatus.read:
-        return Colors.green;
+        return Colors.blue;   // Blue double checkmark when read
       default:
         return Colors.grey;
     }

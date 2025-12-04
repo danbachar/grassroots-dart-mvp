@@ -221,29 +221,15 @@ class BLEManager {
     await BlePeripheral.clearServices();
     print("Stopped existing advertising and cleared services");
 
-    // Add GATT service with the fixed characteristic
+    // Add GATT service with write-only characteristics
+    // New architecture: all characteristics are write-only, sender connects and writes
     print('Adding GATT service: $serviceUUID');
     await BlePeripheral.addService(
       BleService(
         uuid: serviceUUID,
         primary: true,
         characteristics: [
-          // General purpose characteristic (for chat messages, etc.)
-          BleCharacteristic(
-            uuid: FIXED_CHARACTERISTIC_UUID,
-            properties: [
-              CharacteristicProperties.read.index,
-              CharacteristicProperties.write.index,
-              CharacteristicProperties.writeWithoutResponse.index,
-              CharacteristicProperties.notify.index,
-            ],
-            value: null,
-            permissions: [
-              AttributePermissions.readable.index,
-              AttributePermissions.writeable.index,
-            ],
-          ),
-          // Friend request characteristic (Central writes friend requests here)
+          // Friend request characteristic (sender writes friend requests here)
           BleCharacteristic(
             uuid: FRIEND_REQUEST_CHARACTERISTIC_UUID,
             properties: [
@@ -253,16 +239,25 @@ class BLEManager {
             value: null,
             permissions: [AttributePermissions.writeable.index],
           ),
-          // Friend response characteristic (Peripheral notifies accept/reject)
+          // Friend response characteristic (sender writes accept/reject here)
           BleCharacteristic(
             uuid: FRIEND_RESPONSE_CHARACTERISTIC_UUID,
             properties: [
-              CharacteristicProperties.read.index,
-              CharacteristicProperties.notify.index,
-              CharacteristicProperties.indicate.index,
+              CharacteristicProperties.write.index,
+              CharacteristicProperties.writeWithoutResponse.index,
             ],
             value: null,
-            permissions: [AttributePermissions.readable.index],
+            permissions: [AttributePermissions.writeable.index],
+          ),
+          // Message characteristic (sender writes chat messages here)
+          BleCharacteristic(
+            uuid: MESSAGE_CHARACTERISTIC_UUID,
+            properties: [
+              CharacteristicProperties.write.index,
+              CharacteristicProperties.writeWithoutResponse.index,
+            ],
+            value: null,
+            permissions: [AttributePermissions.writeable.index],
           ),
         ],
       ),

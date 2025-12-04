@@ -4,14 +4,56 @@ import '../models/message.dart';
 import '../protocol/constants.dart';
 import '../protocol/payloads.dart';
 import '../protocol/packet.dart';
+import 'database_service.dart';
 
 /// Manages chat messages, routing, and store-and-forward
 class MessageService {
-  // In-memory storage (will be replaced with database later)
+  final DatabaseService _db;
+  
+  // In-memory cache (synced with database)
   final Map<String, Message> _messages = {}; // messageId -> Message
   final Map<String, List<String>> _chatHistory = {}; // peerId -> [messageIds]
   final List<String> _pendingMessages = []; // messageIds waiting for delivery
   final Random _random = Random.secure();
+  
+  bool _initialized = false;
+  
+  MessageService(this._db);
+  
+  /// Initialize service - load messages from database
+  Future<void> initialize() async {
+    if (_initialized) return;
+    
+    final dbMessages = await _db.getAllMessages();
+    for (final message in dbMessages) {
+      final msgKey = _messageIdToString(message.messageId);
+      _messages[msgKey] = message;
+      
+      // Build chat history
+      // Use sender or recipient based on who the "other" party is
+      // For simplicity, add to both sender and recipient chat histories
+      final senderKey = _peerIdToString(message.senderId);
+      _chatHistory[senderKey] = (_chatHistory[senderKey] ?? [])..add(msgKey);
+      
+      if (message.recipientId != null) {
+        final recipientKey = _peerIdToString(message.recipientId!);
+        if (recipientKey != senderKey) {
+          // Don't add twice if same key
+          if (!(_chatHistory[recipientKey]?.contains(msgKey) ?? false)) {
+            _chatHistory[recipientKey] = (_chatHistory[recipientKey] ?? [])..add(msgKey);
+          }
+        }
+      }
+      
+      // Rebuild pending queue
+      if (message.isPending) {
+        _pendingMessages.add(msgKey);
+      }
+    }
+    
+    _initialized = true;
+    print('MessageService: Loaded ${_messages.length} messages from database');
+  }
 
   /// Get all messages
   List<Message> get allMessages => _messages.values.toList();
@@ -67,6 +109,9 @@ class MessageService {
 
     // Add to pending queue
     _pendingMessages.add(msgKey);
+    
+    // Persist to database (fire and forget)
+    _db.insertMessage(message);
 
     // Create chat message payload
     final payload = ChatMessagePayload(
@@ -115,6 +160,9 @@ class MessageService {
     // Add to chat history
     final peerKey = _peerIdToString(senderId);
     _chatHistory[peerKey] = (_chatHistory[peerKey] ?? [])..add(msgKey);
+    
+    // Persist to database (fire and forget)
+    _db.insertMessage(message);
 
     return message;
   }
@@ -193,7 +241,9 @@ class MessageService {
     final msgKey = _messageIdToString(messageId);
     final message = _messages[msgKey];
     if (message != null) {
-      _messages[msgKey] = message.withStatus(MessageStatus.sent);
+      final updated = message.withStatus(MessageStatus.sent);
+      _messages[msgKey] = updated;
+      _db.updateMessageStatus(messageId, MessageStatus.sent);
     }
   }
 
@@ -202,8 +252,10 @@ class MessageService {
     final msgKey = _messageIdToString(messageId);
     final message = _messages[msgKey];
     if (message != null) {
-      _messages[msgKey] = message.withStatus(MessageStatus.delivered);
+      final updated = message.withStatus(MessageStatus.delivered);
+      _messages[msgKey] = updated;
       _pendingMessages.remove(msgKey);
+      _db.updateMessageStatus(messageId, MessageStatus.delivered);
     }
   }
 
@@ -212,7 +264,9 @@ class MessageService {
     final msgKey = _messageIdToString(messageId);
     final message = _messages[msgKey];
     if (message != null) {
-      _messages[msgKey] = message.withStatus(MessageStatus.read);
+      final updated = message.withStatus(MessageStatus.read);
+      _messages[msgKey] = updated;
+      _db.updateMessageStatus(messageId, MessageStatus.read);
     }
   }
 
@@ -236,7 +290,6 @@ class MessageService {
 
   /// Clean up expired messages
   void cleanupExpiredMessages() {
-    final now = DateTime.now();
     final expiredIds = <String>[];
 
     for (final entry in _messages.entries) {

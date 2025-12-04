@@ -3,13 +3,33 @@ import '../models/peer.dart';
 import '../protocol/constants.dart';
 import '../protocol/payloads.dart';
 import '../protocol/packet.dart';
+import 'database_service.dart';
 
 /// Manages friendship requests and friend list
 class FriendshipService {
-  // In-memory storage (will be replaced with database later)
+  final DatabaseService _db;
+  
+  // In-memory cache (synced with database)
   final Map<String, Peer> _friends = {};
   final Map<String, DateTime> _pendingRequests = {}; // peerId -> request time
   final Map<String, DateTime> _rejectionCooldowns = {}; // peerId -> rejection time
+  
+  bool _initialized = false;
+  
+  FriendshipService(this._db);
+  
+  /// Initialize service - load friends from database
+  Future<void> initialize() async {
+    if (_initialized) return;
+    
+    final dbFriends = await _db.getAllFriends();
+    for (final friend in dbFriends) {
+      final key = _peerIdToString(friend.peerId);
+      _friends[key] = friend;
+    }
+    _initialized = true;
+    print('FriendshipService: Loaded ${_friends.length} friends from database');
+  }
 
   /// Get all friends
   List<Peer> get friends => _friends.values.toList();
@@ -34,12 +54,18 @@ class FriendshipService {
     // Clear any pending request or cooldown
     _pendingRequests.remove(key);
     _rejectionCooldowns.remove(key);
+    
+    // Persist to database (fire and forget)
+    _db.insertFriend(peer);
   }
 
   /// Remove a friend from the list
   void removeFriend(Uint8List peerId) {
     final key = _peerIdToString(peerId);
     _friends.remove(key);
+    
+    // Remove from database (fire and forget)
+    _db.deleteFriend(peerId);
   }
 
   /// Create a friend request packet

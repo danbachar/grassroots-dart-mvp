@@ -3,13 +3,17 @@
 // GATT Service/Characteristic UUIDs
 const String FIXED_CHARACTERISTIC_UUID = 'A1B2C3D4-E5F6-4A5B-8C9D-0E1F2A3B4C5D';
 
-// Dedicated characteristic for friend request flow (Central writes requests, subscribes for responses)
+// Dedicated characteristic for friend requests (sender connects and writes)
 const String FRIEND_REQUEST_CHARACTERISTIC_UUID =
     'A1B2C3D4-E5F6-4A5B-8C9D-0E1F2A3B4C6D';
 
-// Characteristic for friend responses (Peripheral notifies accept/reject to subscribed Central)
+// Characteristic for friend responses (sender connects and writes accept/reject)
 const String FRIEND_RESPONSE_CHARACTERISTIC_UUID =
     'A1B2C3D4-E5F6-4A5B-8C9D-0E1F2A3B4C7D';
+
+// Characteristic for chat messages (sender connects and writes)
+const String MESSAGE_CHARACTERISTIC_UUID =
+    'A1B2C3D4-E5F6-4A5B-8C9D-0E1F2A3B4C8D';
 
 // Message Types
 class MessageType {
