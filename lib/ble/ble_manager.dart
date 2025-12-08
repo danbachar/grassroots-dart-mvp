@@ -66,6 +66,7 @@ class BLEManager {
           eventArgs.advertisement.name!.isEmpty) {
         return;
       }
+      // TODO: filter devices by having necessary GATT services and attributes, maybe manufacturerID?
       onDeviceDiscovered?.call(eventArgs);
     });
 
@@ -206,7 +207,10 @@ class BLEManager {
     required String deviceName,
   }) async {
     print("Starting advertising...");
-    if (_isAdvertising) return;
+    // if (_isAdvertising) {
+    //   print("Returned");
+    //   return;
+    // }
 
     // Request BLUETOOTH_ADVERTISE permission at runtime (required for Android 12+)
     var status = await Permission.bluetoothAdvertise.request();
@@ -273,9 +277,12 @@ class BLEManager {
 
     // Start advertising
     print('Starting advertising as $deviceName with service $serviceUUID');
+    print("Advertising with manufacturer data");
+    var data = ManufacturerData(manufacturerId: 0x539, data: Uint8List.fromList([0x00]));
     await BlePeripheral.startAdvertising(
       services: [serviceUUID],
       localName: deviceName,
+      manufacturerData: data,
     );
 
     _isAdvertising = true;

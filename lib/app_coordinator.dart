@@ -1,11 +1,14 @@
 import 'dart:async';
 import 'dart:typed_data';
+import 'package:ble_peripheral/ble_peripheral.dart';
 import 'package:bluetooth_low_energy/bluetooth_low_energy.dart'
     hide ConnectionState;
 import 'package:bluetooth_low_energy/bluetooth_low_energy.dart'
     as ble
     show ConnectionState;
 import 'package:flutter/material.dart' hide ConnectionState;
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:uuid/uuid.dart';
 
 import 'ble/ble_manager.dart';
 import 'models/message.dart';
@@ -25,12 +28,22 @@ import 'services/privacy_service.dart';
 /// - To send any message, sender connects to target, writes to characteristic, disconnects
 /// - Three characteristics: friend requests, friend responses, messages
 class AppCoordinator extends ChangeNotifier {
-  // My identity (temporary - will be generated/loaded from storage)
-  late final Uint8List myPeerId;
-  late final Uint8List myNoisePk;
-  late final Uint8List mySignPk;
-  late final String myDisplayName;
-  late final String myServiceUUID;
+  // My identity (persisted)
+  late Uint8List myPeerId; // Derived from service UUID
+  late Uint8List myNoisePk;
+  late Uint8List mySignPk;
+  String _myDisplayName = 'Grassroots User';
+  
+  // My service UUID (persisted, used for advertising and identity)
+  String _myServiceUUID = '';
+  static const String _serviceUUIDKey = 'grassroots_service_uuid';
+  static const String _displayNameKey = 'grassroots_display_name';
+  
+  /// Get the current service UUID
+  String get myServiceUUID => _myServiceUUID;
+  
+  /// Get the current display name
+  String get myDisplayName => _myDisplayName;
 
   // Managers and services
   final BLEManager _bleManager;
@@ -38,6 +51,9 @@ class AppCoordinator extends ChangeNotifier {
   late final FriendshipService _friendshipService;
   late final MessageService _messageService;
   final PrivacyService _privacyService;
+
+  // Nearby peers - automatically discovered Grassroots devices (not persisted)
+  final List<Peer> _nearbyPeers = [];
 
   // State - simplified
   final List<DiscoveredEventArgs> _scanResults = [];
@@ -89,7 +105,7 @@ class AppCoordinator extends ChangeNotifier {
   // Track currently open chat for immediate read receipts
   Uint8List? _activeChatPeerId;
 
-  AppCoordinator({required this.myDisplayName})
+  AppCoordinator()
     : _bleManager = BLEManager(),
       _databaseService = DatabaseService(),
       _privacyService = PrivacyService() {
@@ -100,33 +116,105 @@ class AppCoordinator extends ChangeNotifier {
     _setupBLECallbacks();
   }
 
-  /// Initialize identity (temporary implementation - generates random keys)
+  /// Initialize identity (temporary implementation for noise/sign keys)
   void _initializeIdentity() {
-    // TODO: Load from secure storage or generate on first launch
-    // For now, using placeholder values
-    myPeerId = Uint8List(8);
+    // Initialize placeholder keys (will be properly generated later)
+    myPeerId = Uint8List(8); // Will be derived from service UUID
     myNoisePk = Uint8List(32);
     mySignPk = Uint8List(32);
 
-    // Fill with random-ish data (not cryptographically secure, just for testing)
-    for (int i = 0; i < 8; i++) {
-      myPeerId[i] = DateTime.now().millisecondsSinceEpoch % 256;
-    }
+    // Fill noise/sign keys with random-ish data (not cryptographically secure, just for testing)
     for (int i = 0; i < 32; i++) {
       myNoisePk[i] = (DateTime.now().millisecondsSinceEpoch + i) % 256;
       mySignPk[i] = (DateTime.now().millisecondsSinceEpoch + i + 100) % 256;
     }
-
-    // Derive service UUID from noise PK (last 128 bits)
-    final last16Bytes = myNoisePk.sublist(16, 32);
-    final hex = last16Bytes
-        .map((b) => b.toRadixString(16).padLeft(2, '0'))
-        .join();
-    myServiceUUID =
-        '${hex.substring(0, 8)}-${hex.substring(8, 12)}-${hex.substring(12, 16)}-${hex.substring(16, 20)}-${hex.substring(20, 32)}';
-
-    print('My Peer ID: ${_bytesToHex(myPeerId)}');
-    print('My Service UUID: $myServiceUUID');
+  }
+  
+  /// Load or generate the service UUID and display name
+  Future<void> _loadOrGenerateServiceUUID() async {
+    final prefs = await SharedPreferences.getInstance();
+    
+    // Load display name
+    final storedName = prefs.getString(_displayNameKey);
+    if (storedName != null && storedName.isNotEmpty) {
+      _myDisplayName = storedName;
+      print('Loaded Display Name: $_myDisplayName');
+    }
+    
+    // Load or generate service UUID
+    final storedUUID = prefs.getString(_serviceUUIDKey);
+    if (storedUUID != null && storedUUID.isNotEmpty) {
+      _myServiceUUID = storedUUID;
+      print('Loaded Service UUID: $_myServiceUUID');
+    } else {
+      await regenerateServiceUUID();
+    }
+    
+    // Derive peer ID from service UUID (first 8 bytes)
+    _derivePeerIdFromServiceUUID();
+  }
+  
+  /// Derive the 8-byte peer ID from the service UUID
+  void _derivePeerIdFromServiceUUID() {
+    // Remove dashes from UUID and take first 16 hex chars (8 bytes)
+    final uuidHex = _myServiceUUID.replaceAll('-', '');
+    if (uuidHex.length >= 16) {
+      myPeerId = _hexToBytes(uuidHex.substring(0, 16));
+      print('Derived Peer ID: ${_bytesToHex(myPeerId)}');
+    }
+  }
+  
+  /// Convert hex string to bytes
+  Uint8List _hexToBytes(String hex) {
+    final result = Uint8List(hex.length ~/ 2);
+    for (int i = 0; i < hex.length; i += 2) {
+      result[i ~/ 2] = int.parse(hex.substring(i, i + 2), radix: 16);
+    }
+    return result;
+  }
+  
+  /// Regenerate the service UUID (new identity)
+  Future<void> regenerateServiceUUID() async {
+    final uuidGen = Uuid();
+    _myServiceUUID = uuidGen.v4().toUpperCase();
+    
+    // Persist the new UUID
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_serviceUUIDKey, _myServiceUUID);
+    
+    // Derive new peer ID from new service UUID
+    _derivePeerIdFromServiceUUID();
+    
+    print('Generated new Service UUID: $_myServiceUUID');
+    
+    // Restart advertising with new UUID if currently advertising
+    if (_bleManager.isAdvertising) {
+      await stopAdvertising();
+      await startAdvertising();
+    }
+    
+    notifyListeners();
+  }
+  
+  /// Update the display name
+  Future<void> setDisplayName(String name) async {
+    if (name.trim().isEmpty) return;
+    
+    _myDisplayName = name.trim();
+    
+    // Persist the new name
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_displayNameKey, _myDisplayName);
+    
+    print('Updated Display Name: $_myDisplayName');
+    
+    // Restart advertising with new name if currently advertising
+    if (_bleManager.isAdvertising) {
+      await stopAdvertising();
+      await startAdvertising();
+    }
+    
+    notifyListeners();
   }
 
   /// Setup BLE callbacks
@@ -138,6 +226,9 @@ class AppCoordinator extends ChangeNotifier {
 
   /// Initialize BLE (request permissions) and start continuous operation
   Future<void> initialize() async {
+    // Load or generate service UUID first
+    await _loadOrGenerateServiceUUID();
+    
     // Load persisted data from database
     await _friendshipService.initialize();
     await _messageService.initialize();
@@ -159,6 +250,14 @@ class AppCoordinator extends ChangeNotifier {
   // ==================== Getters ====================
 
   List<Peer> get friends => _friendshipService.friends;
+  
+  /// Get list of auto-discovered nearby Grassroots peers (not persisted)
+  List<Peer> get nearbyPeers => List.unmodifiable(_nearbyPeers);
+  
+  /// Check if a peer is in the nearby peers list by peripheral ID
+  bool isNearbyPeer(String peripheralId) {
+    return _nearbyPeers.any((p) => p.peripheral?.uuid.toString() == peripheralId);
+  }
   
   /// Get set of peripheral UUIDs with pending friend requests
   Set<String> get pendingOutgoingRequests => Set.unmodifiable(_pendingOutgoingRequests);
@@ -249,8 +348,10 @@ class AppCoordinator extends ChangeNotifier {
     
     // Start advertising if privacy allows
     if (_privacyService.shouldAdvertise) {
+      print("App coordinator starting advertisement");
       startAdvertising();
     } else {
+      print("App coordinator stopping advertisement");
       stopAdvertising();
     }
     
@@ -287,7 +388,45 @@ class AppCoordinator extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Clean up expired entries from device cache
+  /// Clear all discovered devices and nearby peers, then force start a fresh scan
+  Future<void> clearAndRescan() async {
+    print('Clearing nearby peers and restarting scan...');
+    
+    // Clear all discovered data
+    _nearbyPeers.clear();
+    _scanResults.clear();
+    _discoveredDevices.clear();
+    _deviceCache.clear();
+    _compatibleDevices.clear();
+    _friendsInRange.clear();
+    
+    // Notify UI immediately to show cleared state
+    notifyListeners();
+    
+    // Stop current scan if running
+    if (_bleManager.isScanning) {
+      await _bleManager.stopScan();
+    }
+    
+    // Cancel any existing scan timer
+    _scanRestartTimer?.cancel();
+    
+    // Start fresh scan
+    await startScan();
+    
+    // Restart the continuous scan cycle
+    _scanRestartTimer = Timer(_scanDuration, () async {
+      if (_bleManager.isScanning) {
+        await _bleManager.stopScan();
+        notifyListeners();
+      }
+      _scanRestartTimer = Timer(_scanPause, () {
+        _runContinuousScan();
+      });
+    });
+  }
+
+  /// Clean up expired entries from device cache and nearby peers
   void _cleanupExpiredCache() {
     final expiredKeys = <String>[];
 
@@ -299,6 +438,12 @@ class AppCoordinator extends ChangeNotifier {
 
     for (final key in expiredKeys) {
       _deviceCache.remove(key);
+      _compatibleDevices.remove(key);
+      
+      // Also remove from nearby peers
+      _nearbyPeers.removeWhere(
+        (p) => p.peripheral?.uuid.toString() == key,
+      );
     }
 
     if (expiredKeys.isNotEmpty) {
@@ -334,12 +479,14 @@ class AppCoordinator extends ChangeNotifier {
       return;
     }
 
+    // Use display name if privacy allows, otherwise use generic name
     final name = _privacyService.shouldAdvertiseName
-        ? myDisplayName
-        : 'Voyager';
+        ? _myDisplayName
+        : 'Grassroots';
+    print("Starting advertising as $name with UUID $myServiceUUID in appCoordinator");
     await _bleManager.startAdvertising(
       serviceUUID: myServiceUUID,
-      deviceName: name,
+      deviceName: name
     );
     notifyListeners();
   }
@@ -728,6 +875,11 @@ class AppCoordinator extends ChangeNotifier {
   // ==================== Internal Handlers ====================
 
   void _handleDeviceDiscovered(DiscoveredEventArgs eventArgs) {
+    var arr = eventArgs.advertisement.manufacturerSpecificData;
+    for (final data in arr) {
+      print('Manufacturer ID=${data.id}, Data=${data.data}');
+    }
+    // print(eventArgs.advertisement.manufacturerSpecificData)
     final peripheralId = eventArgs.peripheral.uuid.toString();
 
     // Update device cache with timestamp
@@ -745,6 +897,8 @@ class AppCoordinator extends ChangeNotifier {
     } else {
       _scanResults.add(eventArgs);
     }
+
+    // TODO: move these checks up, to show only supporting devices
 
     // Check if this device is compatible (has our characteristics)
     // We verify by checking if it advertises a service UUID that looks like ours
@@ -764,8 +918,11 @@ class AppCoordinator extends ChangeNotifier {
   Future<void> _verifyDeviceCompatibility(DiscoveredEventArgs device) async {
     final peripheralId = device.peripheral.uuid.toString();
     
-    // Already verified
-    if (_compatibleDevices.contains(peripheralId)) return;
+    // Already verified - just update timestamp
+    if (_compatibleDevices.contains(peripheralId)) {
+      _updateNearbyPeerLastSeen(peripheralId, device);
+      return;
+    }
     
     // Quick check: if it has service UUIDs in advertisement, check format
     // Grassroots devices advertise a UUID derived from their noise PK
@@ -781,7 +938,73 @@ class AppCoordinator extends ChangeNotifier {
       if (name != null && name.isNotEmpty) {
         _compatibleDevices.add(peripheralId);
         print('Device $name marked as compatible (has service UUIDs)');
+        
+        // Add to nearby peers list
+        _addOrUpdateNearbyPeer(device);
       }
+    }
+  }
+  
+  /// Add or update a nearby peer from a discovered device
+  void _addOrUpdateNearbyPeer(DiscoveredEventArgs device) {
+    final peripheralId = device.peripheral.uuid.toString();
+    final deviceName = device.advertisement.name ?? 'Unknown Device';
+    
+    // Check if already in nearby peers
+    final existingIndex = _nearbyPeers.indexWhere(
+      (p) => p.peripheral?.uuid.toString() == peripheralId,
+    );
+    
+    if (existingIndex >= 0) {
+      // Update existing peer with fresh peripheral reference
+      _nearbyPeers[existingIndex] = Peer(
+        peerId: _nearbyPeers[existingIndex].peerId,
+        noisePk: _nearbyPeers[existingIndex].noisePk,
+        signPk: _nearbyPeers[existingIndex].signPk,
+        displayName: deviceName,
+        peripheral: device.peripheral,
+        isVerified: false,
+      );
+    } else {
+      // Create a temporary peer ID based on peripheral UUID
+      // This will be replaced with actual peer ID after identity exchange
+      final tempPeerId = Uint8List(8);
+      final peripheralBytes = peripheralId.codeUnits;
+      for (int i = 0; i < 8 && i < peripheralBytes.length; i++) {
+        tempPeerId[i] = peripheralBytes[i] % 256;
+      }
+      
+      final newPeer = Peer(
+        peerId: tempPeerId,
+        noisePk: Uint8List(32), // Empty until identity exchange
+        signPk: Uint8List(32),  // Empty until identity exchange
+        displayName: deviceName,
+        peripheral: device.peripheral,
+        isVerified: false,
+      );
+      
+      _nearbyPeers.add(newPeer);
+      print('Added nearby peer: $deviceName');
+    }
+  }
+  
+  /// Update lastSeen for an existing nearby peer
+  void _updateNearbyPeerLastSeen(String peripheralId, DiscoveredEventArgs device) {
+    final existingIndex = _nearbyPeers.indexWhere(
+      (p) => p.peripheral?.uuid.toString() == peripheralId,
+    );
+    
+    if (existingIndex >= 0) {
+      // Update peripheral reference to keep it fresh
+      final existing = _nearbyPeers[existingIndex];
+      _nearbyPeers[existingIndex] = Peer(
+        peerId: existing.peerId,
+        noisePk: existing.noisePk,
+        signPk: existing.signPk,
+        displayName: device.advertisement.name ?? existing.displayName,
+        peripheral: device.peripheral,
+        isVerified: existing.isVerified,
+      );
     }
   }
 

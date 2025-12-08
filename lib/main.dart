@@ -19,7 +19,7 @@ class MyApp extends StatelessWidget {
     return MultiProvider(
       providers: [
         ChangeNotifierProvider(
-          create: (context) => AppCoordinator(myDisplayName: 'User'),
+          create: (context) => AppCoordinator(),
         ),
       ],
       child: MaterialApp(
@@ -131,7 +131,7 @@ class _MyHomePageState extends State<MyHomePage> {
     Widget page;
     switch (selectedIndex) {
       case 0:
-        page = FriendsListPage();
+        page = NearbyPeersPage();
         break;
       case 1:
         page = ChatsPage();
@@ -155,7 +155,7 @@ class _MyHomePageState extends State<MyHomePage> {
                   destinations: [
                     NavigationRailDestination(
                       icon: Icon(Icons.people),
-                      label: Text('Friends'),
+                      label: Text('Nearby'),
                     ),
                     NavigationRailDestination(
                       icon: Icon(Icons.chat),
@@ -188,44 +188,89 @@ class _MyHomePageState extends State<MyHomePage> {
   }
 }
 
-// ==================== Friends List Page ====================
+// ==================== Nearby Peers Page ====================
 
-class FriendsListPage extends StatelessWidget {
+class NearbyPeersPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final coordinator = context.watch<AppCoordinator>();
-    final friends = coordinator.friends;
+    final nearbyPeers = coordinator.nearbyPeers;
 
     return Scaffold(
       appBar: AppBar(
-        title: Text('Friends'),
+        title: Text('Nearby Peers'),
         backgroundColor: Theme.of(context).colorScheme.primaryContainer,
+        actions: [
+          // Refresh button
+          IconButton(
+            icon: Icon(Icons.refresh),
+            tooltip: 'Clear and rescan',
+            onPressed: () {
+              coordinator.clearAndRescan();
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text('Rescanning for nearby devices...'),
+                  duration: Duration(seconds: 2),
+                ),
+              );
+            },
+          ),
+          // Scanning indicator
+          if (coordinator.isScanning)
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 16),
+              child: Row(
+                children: [
+                  SizedBox(
+                    width: 16,
+                    height: 16,
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  ),
+                  SizedBox(width: 8),
+                  Text('Scanning...', style: TextStyle(fontSize: 12)),
+                ],
+              ),
+            ),
+        ],
       ),
-      body: friends.isEmpty
+      body: nearbyPeers.isEmpty
           ? Center(
               child: Column(
                 mainAxisAlignment: MainAxisAlignment.center,
                 children: [
-                  Icon(Icons.people_outline, size: 64, color: Colors.grey),
+                  Icon(Icons.bluetooth_searching, size: 64, color: Colors.grey),
                   SizedBox(height: 16),
                   Text(
-                    'No friends yet',
+                    'No nearby Grassroots devices',
                     style: TextStyle(fontSize: 18, color: Colors.grey),
                   ),
                   SizedBox(height: 8),
                   Text(
-                    'Go to Bluetooth to discover and pair with nearby users',
+                    'Make sure other devices are running the app',
                     style: TextStyle(color: Colors.grey),
                     textAlign: TextAlign.center,
                   ),
+                  SizedBox(height: 24),
+                  if (coordinator.isScanning)
+                    Row(
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        SizedBox(
+                          width: 20,
+                          height: 20,
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        ),
+                        SizedBox(width: 12),
+                        Text('Scanning for devices...'),
+                      ],
+                    ),
                 ],
               ),
             )
           : ListView.builder(
-              itemCount: friends.length,
+              itemCount: nearbyPeers.length,
               itemBuilder: (context, index) {
-                final friend = friends[index];
-                final isInRange = coordinator.isFriendInRange(friend);
+                final peer = nearbyPeers[index];
 
                 return Card(
                   margin: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
@@ -233,88 +278,53 @@ class FriendsListPage extends StatelessWidget {
                     leading: Stack(
                       children: [
                         CircleAvatar(
-                          backgroundColor: Theme.of(
-                            context,
-                          ).colorScheme.primary,
+                          backgroundColor: Theme.of(context).colorScheme.primary,
                           child: Text(
-                            friend.displayName[0].toUpperCase(),
+                            peer.displayName[0].toUpperCase(),
                             style: TextStyle(color: Colors.white),
                           ),
                         ),
-                        // In-range indicator (green dot)
-                        if (isInRange)
-                          Positioned(
-                            right: 0,
-                            bottom: 0,
-                            child: Container(
-                              width: 14,
-                              height: 14,
-                              decoration: BoxDecoration(
-                                color: Colors.green,
-                                shape: BoxShape.circle,
-                                border: Border.all(
-                                  color: Colors.white,
-                                  width: 2,
-                                ),
+                        // In-range indicator (always green since these are nearby peers)
+                        Positioned(
+                          right: 0,
+                          bottom: 0,
+                          child: Container(
+                            width: 14,
+                            height: 14,
+                            decoration: BoxDecoration(
+                              color: Colors.green,
+                              shape: BoxShape.circle,
+                              border: Border.all(
+                                color: Colors.white,
+                                width: 2,
                               ),
                             ),
                           ),
+                        ),
                       ],
                     ),
                     title: Row(
                       children: [
-                        Expanded(child: Text(friend.displayName)),
-                        if (friend.isVerified) ...[
-                          SizedBox(width: 4),
-                          Icon(Icons.verified, color: Colors.green, size: 16),
-                        ],
-                        if (isInRange) ...[
-                          SizedBox(width: 4),
-                          Icon(
-                            Icons.bluetooth_connected,
-                            color: Colors.blue,
-                            size: 16,
-                          ),
-                        ],
+                        Expanded(child: Text(peer.displayName)),
+                        Icon(
+                          Icons.bluetooth_connected,
+                          color: Colors.blue,
+                          size: 16,
+                        ),
                       ],
                     ),
-                    subtitle: Row(
-                      children: [
-                        Text(
-                          '${friend.peerIdHex.substring(0, 16)}...',
-                          style: TextStyle(
-                            fontFamily: 'monospace',
-                            fontSize: 12,
-                          ),
-                        ),
-                        if (isInRange) ...[
-                          SizedBox(width: 8),
-                          Text(
-                            'In Range',
-                            style: TextStyle(
-                              color: Colors.green,
-                              fontSize: 12,
-                              fontWeight: FontWeight.w500,
-                            ),
-                          ),
-                        ],
-                      ],
+                    subtitle: Text(
+                      'In Range',
+                      style: TextStyle(
+                        color: Colors.green,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w500,
+                      ),
                     ),
-                    trailing: Row(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        IconButton(
-                          icon: Icon(Icons.chat, color: Colors.blue),
-                          onPressed: () => _openChat(context, friend),
-                          tooltip: 'Open Chat',
-                        ),
-                        IconButton(
-                          icon: Icon(Icons.person_remove, color: Colors.red),
-                          onPressed: () =>
-                              _confirmRemoveFriend(context, friend),
-                          tooltip: 'Remove Friend',
-                        ),
-                      ],
+                    trailing: IconButton(
+                      icon: Icon(Icons.chat, color: Colors.blue),
+                      onPressed: () => _openChat(context, peer),
+                      tooltip: 'Open Chat',
                     ),
                   ),
                 );
@@ -323,39 +333,9 @@ class FriendsListPage extends StatelessWidget {
     );
   }
 
-  void _openChat(BuildContext context, Peer friend) {
-    Navigator.of(
-      context,
-    ).push(MaterialPageRoute(builder: (context) => ChatPage(friend: friend)));
-  }
-
-  void _confirmRemoveFriend(BuildContext context, Peer friend) {
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text('Remove Friend'),
-        content: Text(
-          'Are you sure you want to remove ${friend.displayName} from your friends list? This will also disconnect the Bluetooth connection.',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: Text('Cancel'),
-          ),
-          ElevatedButton(
-            onPressed: () {
-              final coordinator = context.read<AppCoordinator>();
-              coordinator.removeFriend(friend);
-              Navigator.of(context).pop();
-            },
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.red,
-              foregroundColor: Colors.white,
-            ),
-            child: Text('Remove'),
-          ),
-        ],
-      ),
+  void _openChat(BuildContext context, Peer peer) {
+    Navigator.of(context).push(
+      MaterialPageRoute(builder: (context) => ChatPage(friend: peer)),
     );
   }
 }
@@ -366,16 +346,16 @@ class ChatsPage extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final coordinator = context.watch<AppCoordinator>();
-    final friends = coordinator.friends;
+    final nearbyPeers = coordinator.nearbyPeers;
 
     // Build chat summaries sorted by most recent message
     final chatSummaries = <_ChatSummary>[];
-    for (final friend in friends) {
-      final messages = coordinator.getChat(friend);
+    for (final peer in nearbyPeers) {
+      final messages = coordinator.getChat(peer);
       final lastMessage = messages.isNotEmpty ? messages.last : null;
       chatSummaries.add(
         _ChatSummary(
-          friend: friend,
+          friend: peer,
           lastMessage: lastMessage,
           lastMessageTime: lastMessage?.timestamp,
         ),
@@ -445,7 +425,8 @@ class _ChatListTile extends StatelessWidget {
     final coordinator = context.watch<AppCoordinator>();
     final friend = summary.friend;
     final lastMessage = summary.lastMessage;
-    final isInRange = coordinator.isFriendInRange(friend);
+    // Nearby peers are always in range by definition
+    final isInRange = coordinator.isNearbyPeer(friend.peripheral?.uuid.toString() ?? '');
     final hasUnread = coordinator.hasUnreadMessages(friend);
     final unreadCount = coordinator.getUnreadCount(friend);
 
@@ -660,19 +641,6 @@ class _BluetoothPageState extends State<BluetoothPage> {
   @override
   void initState() {
     super.initState();
-
-    // Setup friend request callback
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      final coordinator = context.read<AppCoordinator>();
-      coordinator.onFriendRequestReceived = _handleFriendRequest;
-    });
-  }
-
-  void _handleFriendRequest(Peer requester) {
-    showDialog(
-      context: context,
-      builder: (context) => FriendRequestDialog(requester: requester),
-    );
   }
 
   @override
@@ -681,36 +649,9 @@ class _BluetoothPageState extends State<BluetoothPage> {
 
     return Scaffold(
       appBar: AppBar(
-        title: Text('Nearby Devices'),
+        title: Text('Bluetooth Status'),
         backgroundColor: Theme.of(context).colorScheme.primaryContainer,
         actions: [
-          // Status indicators
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 8),
-            child: Row(
-              children: [
-                // Scanning indicator
-                if (coordinator.isScanning)
-                  Padding(
-                    padding: const EdgeInsets.only(right: 8),
-                    child: Row(
-                      children: [
-                        SizedBox(
-                          width: 12,
-                          height: 12,
-                          child: CircularProgressIndicator(strokeWidth: 2),
-                        ),
-                        SizedBox(width: 4),
-                        Text('Scanning', style: TextStyle(fontSize: 12)),
-                      ],
-                    ),
-                  ),
-                // Advertising indicator
-                if (coordinator.isAdvertising)
-                  Icon(Icons.broadcast_on_home, color: Colors.green, size: 20),
-              ],
-            ),
-          ),
           // Privacy level indicator (tappable to open settings)
           ActionChip(
             label: Text(coordinator.privacyLevelName),
@@ -726,202 +667,117 @@ class _BluetoothPageState extends State<BluetoothPage> {
       ),
       body: Column(
         children: [
-          // Status banner
-          Container(
-            width: double.infinity,
-            padding: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            color: coordinator.isScanning ? Colors.blue.shade50 : Colors.grey.shade100,
-            child: Row(
-              children: [
-                Icon(
-                  coordinator.isScanning ? Icons.radar : Icons.bluetooth,
-                  size: 16,
-                  color: coordinator.isScanning ? Colors.blue : Colors.grey,
-                ),
-                SizedBox(width: 8),
-                Text(
-                  coordinator.isScanning 
-                    ? 'Scanning for nearby Grassroots devices...'
-                    : 'Paused - will resume shortly',
-                  style: TextStyle(
-                    fontSize: 13,
-                    color: coordinator.isScanning ? Colors.blue.shade700 : Colors.grey.shade600,
+          // Status cards
+          Card(
+            margin: EdgeInsets.all(16),
+            child: Padding(
+              padding: EdgeInsets.all(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Bluetooth Status',
+                    style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
                   ),
-                ),
-              ],
+                  SizedBox(height: 16),
+                  _StatusRow(
+                    icon: coordinator.isScanning ? Icons.radar : Icons.search_off,
+                    label: 'Scanning',
+                    value: coordinator.isScanning ? 'Active' : 'Paused',
+                    color: coordinator.isScanning ? Colors.green : Colors.grey,
+                  ),
+                  SizedBox(height: 8),
+                  _StatusRow(
+                    icon: coordinator.isAdvertising ? Icons.broadcast_on_home : Icons.broadcast_on_home_outlined,
+                    label: 'Advertising',
+                    value: coordinator.isAdvertising ? 'Active' : 'Off',
+                    color: coordinator.isAdvertising ? Colors.green : Colors.grey,
+                  ),
+                  SizedBox(height: 8),
+                  _StatusRow(
+                    icon: Icons.devices,
+                    label: 'Nearby Peers',
+                    value: '${coordinator.nearbyPeers.length}',
+                    color: Colors.blue,
+                  ),
+                ],
+              ),
             ),
           ),
-
-          // Discovered devices (filtered to compatible only)
+          
+          // Info text
+          Padding(
+            padding: EdgeInsets.symmetric(horizontal: 16),
+            child: Card(
+              color: Colors.blue.shade50,
+              child: Padding(
+                padding: EdgeInsets.all(16),
+                child: Row(
+                  children: [
+                    Icon(Icons.info_outline, color: Colors.blue),
+                    SizedBox(width: 12),
+                    Expanded(
+                      child: Text(
+                        'Grassroots devices are automatically discovered and appear in the Nearby tab. No manual pairing required!',
+                        style: TextStyle(color: Colors.blue.shade700),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ),
+          ),
+          
+          // Raw discovered devices (for debugging)
           Expanded(
             child: coordinator.scanResults.isEmpty
                 ? Center(
                     child: Column(
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
-                        Icon(Icons.bluetooth_searching, size: 64, color: Colors.grey),
+                        Icon(Icons.bluetooth_searching, size: 48, color: Colors.grey),
                         SizedBox(height: 16),
                         Text(
-                          'No Grassroots devices found',
-                          style: TextStyle(fontSize: 16, color: Colors.grey),
-                        ),
-                        SizedBox(height: 8),
-                        Text(
-                          'Make sure other devices are running the app',
-                          style: TextStyle(fontSize: 13, color: Colors.grey),
+                          coordinator.isScanning 
+                            ? 'Scanning for devices...'
+                            : 'Scan paused',
+                          style: TextStyle(color: Colors.grey),
                         ),
                       ],
                     ),
                   )
-                : ListView.builder(
-                    itemCount: coordinator.scanResults.length,
-                    itemBuilder: (context, index) {
-                      final result = coordinator.scanResults[index];
-                      final deviceName =
-                          result.advertisement.name ?? 'Unknown Device';
-                      final deviceUuid = result.peripheral.uuid.toString();
-
-                      // Check if already friends by matching service UUID
-                      Peer? matchedFriend;
-                      for (final friend in coordinator.friends) {
-                        final friendServiceUUID = friend.deriveServiceUUID().toLowerCase();
-                        for (final uuid in result.advertisement.serviceUUIDs) {
-                          if (uuid.toString().toLowerCase() == friendServiceUUID) {
-                            matchedFriend = friend;
-                            break;
-                          }
-                        }
-                        if (matchedFriend != null) break;
-                      }
-                      final isFriend = matchedFriend != null;
-                      
-                      // Check if friend request is pending
-                      final isPending = coordinator.isPendingFriendRequest(deviceUuid);
-
-                      return Opacity(
-                        opacity: isPending ? 0.5 : 1.0,
-                        child: ListTile(
-                          title: Text(deviceName),
-                          subtitle: Row(
-                            children: [
-                              Expanded(
-                                child: Text(
-                                  deviceUuid,
-                                  overflow: TextOverflow.ellipsis,
-                                ),
-                              ),
-                              if (isPending)
-                                Padding(
-                                  padding: const EdgeInsets.only(left: 8),
-                                  child: Text(
-                                    'Request sent',
-                                    style: TextStyle(
-                                      color: Colors.orange,
-                                      fontSize: 12,
-                                      fontWeight: FontWeight.w500,
-                                    ),
-                                  ),
-                                ),
-                            ],
-                          ),
-                          trailing: Row(
-                            mainAxisSize: MainAxisSize.min,
-                            children: [
-                              Text('${result.rssi} dBm'),
-                              SizedBox(width: 8),
-                              if (isFriend)
-                                ElevatedButton.icon(
-                                  onPressed: () => _confirmRemoveFriend(context, matchedFriend!),
-                                  icon: Icon(Icons.person_remove, size: 16),
-                                  label: Text('Remove'),
-                                  style: ElevatedButton.styleFrom(
-                                    backgroundColor: Colors.red,
-                                    foregroundColor: Colors.white,
-                                    padding: EdgeInsets.symmetric(
-                                      horizontal: 8,
-                                      vertical: 4,
-                                    ),
-                                  ),
-                                )
-                              else if (isPending)
-                                ElevatedButton.icon(
-                                  onPressed: null,
-                                  icon: SizedBox(
-                                    width: 16,
-                                    height: 16,
-                                    child: CircularProgressIndicator(
-                                      strokeWidth: 2,
-                                      color: Colors.grey,
-                                    ),
-                                  ),
-                                  label: Text('Pending'),
-                                  style: ElevatedButton.styleFrom(
-                                    padding: EdgeInsets.symmetric(
-                                      horizontal: 8,
-                                      vertical: 4,
-                                    ),
-                                  ),
-                                )
-                              else
-                                ElevatedButton.icon(
-                                  onPressed: () => _sendFriendRequest(result),
-                                  icon: Icon(Icons.person_add, size: 16),
-                                  label: Text('Add Friend'),
-                                  style: ElevatedButton.styleFrom(
-                                    padding: EdgeInsets.symmetric(
-                                      horizontal: 8,
-                                      vertical: 4,
-                                    ),
-                                  ),
-                                ),
-                            ],
-                          ),
+                : Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Padding(
+                        padding: EdgeInsets.all(16),
+                        child: Text(
+                          'Raw Discovered Devices (${coordinator.scanResults.length})',
+                          style: TextStyle(fontWeight: FontWeight.bold),
                         ),
-                      );
-                    },
+                      ),
+                      Expanded(
+                        child: ListView.builder(
+                          itemCount: coordinator.scanResults.length,
+                          itemBuilder: (context, index) {
+                            final result = coordinator.scanResults[index];
+                            final deviceName = result.advertisement.name ?? 'Unknown';
+                            final deviceUuid = result.peripheral.uuid.toString();
+
+                            return ListTile(
+                              leading: Icon(Icons.bluetooth, color: Colors.blue),
+                              title: Text(deviceName),
+                              subtitle: Text(
+                                deviceUuid,
+                                style: TextStyle(fontSize: 10),
+                              ),
+                              trailing: Text('${result.rssi} dBm'),
+                            );
+                          },
+                        ),
+                      ),
+                    ],
                   ),
-          ),
-        ],
-      ),
-    );
-  }
-
-  void _sendFriendRequest(dynamic deviceArgs) async {
-    final coordinator = context.read<AppCoordinator>();
-    await coordinator.sendFriendRequest(deviceArgs);
-  }
-
-  void _confirmRemoveFriend(BuildContext context, Peer friend) {
-    final coordinator = context.read<AppCoordinator>();
-    
-    showDialog(
-      context: context,
-      builder: (context) => AlertDialog(
-        title: Text('Remove Friend'),
-        content: Text(
-          'Are you sure you want to remove ${friend.displayName} from your friends list?',
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(),
-            child: Text('Cancel'),
-          ),
-          ElevatedButton(
-            onPressed: () {
-              coordinator.removeFriend(friend);
-              Navigator.of(context).pop();
-              ScaffoldMessenger.of(this.context).showSnackBar(
-                SnackBar(
-                  content: Text('${friend.displayName} removed from friends'),
-                  duration: Duration(seconds: 2),
-                ),
-              );
-            },
-            style: ElevatedButton.styleFrom(
-              backgroundColor: Colors.red,
-              foregroundColor: Colors.white,
-            ),
-            child: Text('Remove'),
           ),
         ],
       ),
@@ -929,50 +785,30 @@ class _BluetoothPageState extends State<BluetoothPage> {
   }
 }
 
-// ==================== Friend Request Dialog ====================
+class _StatusRow extends StatelessWidget {
+  final IconData icon;
+  final String label;
+  final String value;
+  final Color color;
 
-class FriendRequestDialog extends StatelessWidget {
-  final Peer requester;
-
-  const FriendRequestDialog({Key? key, required this.requester})
-    : super(key: key);
+  const _StatusRow({
+    required this.icon,
+    required this.label,
+    required this.value,
+    required this.color,
+  });
 
   @override
   Widget build(BuildContext context) {
-    final coordinator = context.read<AppCoordinator>();
-
-    return AlertDialog(
-      title: Text('Friend Request'),
-      content: Column(
-        mainAxisSize: MainAxisSize.min,
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Text('${requester.displayName} wants to be friends'),
-          SizedBox(height: 8),
-          Text(
-            'Peer ID: ${requester.peerIdHex.substring(0, 16)}...',
-            style: TextStyle(
-              fontFamily: 'monospace',
-              fontSize: 12,
-              color: Colors.grey,
-            ),
-          ),
-        ],
-      ),
-      actions: [
-        TextButton(
-          onPressed: () {
-            coordinator.rejectFriendRequest(requester);
-            Navigator.of(context).pop();
-          },
-          child: Text('Reject'),
-        ),
-        ElevatedButton(
-          onPressed: () {
-            coordinator.acceptFriendRequest(requester);
-            Navigator.of(context).pop();
-          },
-          child: Text('Accept'),
+    return Row(
+      children: [
+        Icon(icon, color: color, size: 20),
+        SizedBox(width: 12),
+        Text(label),
+        Spacer(),
+        Text(
+          value,
+          style: TextStyle(fontWeight: FontWeight.w500, color: color),
         ),
       ],
     );

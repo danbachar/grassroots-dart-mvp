@@ -139,9 +139,28 @@ class SettingsPage extends StatelessWidget {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        _InfoRow(
-                          label: 'Display Name',
-                          value: coordinator.myDisplayName,
+                        // Editable Display Name
+                        Row(
+                          children: [
+                            SizedBox(
+                              width: 120,
+                              child: Text(
+                                'Display Name:',
+                                style: TextStyle(
+                                  fontWeight: FontWeight.w500,
+                                  color: Colors.grey[700],
+                                ),
+                              ),
+                            ),
+                            Expanded(
+                              child: Text(coordinator.myDisplayName),
+                            ),
+                            IconButton(
+                              icon: Icon(Icons.edit, size: 20),
+                              onPressed: () => _showEditNameDialog(context, coordinator),
+                              tooltip: 'Edit display name',
+                            ),
+                          ],
                         ),
                         _InfoRow(
                           label: 'Peer ID',
@@ -150,8 +169,23 @@ class SettingsPage extends StatelessWidget {
                         ),
                         _InfoRow(
                           label: 'Service UUID',
-                          value: coordinator.myServiceUUID,
+                          value: coordinator.myServiceUUID.isNotEmpty 
+                              ? coordinator.myServiceUUID 
+                              : 'Not generated',
                           monospace: true,
+                        ),
+                        SizedBox(height: 16),
+                        SizedBox(
+                          width: double.infinity,
+                          child: ElevatedButton.icon(
+                            onPressed: () => _showRegenerateDialog(context, coordinator),
+                            icon: Icon(Icons.refresh),
+                            label: Text('Recreate Service UUID'),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: Colors.orange,
+                              foregroundColor: Colors.white,
+                            ),
+                          ),
                         ),
                       ],
                     ),
@@ -167,6 +201,99 @@ class SettingsPage extends StatelessWidget {
 
   String _formatPeerId(List<int> peerId) {
     return peerId.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+  }
+  
+  void _showEditNameDialog(BuildContext context, AppCoordinator coordinator) {
+    final controller = TextEditingController(text: coordinator.myDisplayName);
+    
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text('Edit Display Name'),
+        content: TextField(
+          controller: controller,
+          autofocus: true,
+          decoration: InputDecoration(
+            labelText: 'Display Name',
+            hintText: 'Enter your name',
+            border: OutlineInputBorder(),
+          ),
+          maxLength: 30,
+          onSubmitted: (value) {
+            if (value.trim().isNotEmpty) {
+              coordinator.setDisplayName(value);
+              Navigator.of(context).pop();
+            }
+          },
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () {
+              if (controller.text.trim().isNotEmpty) {
+                coordinator.setDisplayName(controller.text);
+                Navigator.of(context).pop();
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text('Display name updated'),
+                    backgroundColor: Colors.green,
+                  ),
+                );
+              }
+            },
+            child: Text('Save'),
+          ),
+        ],
+      ),
+    );
+  }
+  
+  void _showRegenerateDialog(BuildContext context, AppCoordinator coordinator) {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Row(
+          children: [
+            Icon(Icons.warning, color: Colors.orange),
+            SizedBox(width: 8),
+            Text('Regenerate Service UUID?'),
+          ],
+        ),
+        content: Text(
+          'This will generate a new identity for your device. '
+          'Other devices will see you as a new peer.\n\n'
+          'This action cannot be undone.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(context).pop(),
+            child: Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              Navigator.of(context).pop();
+              await coordinator.regenerateServiceUUID();
+              if (context.mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text('Service UUID regenerated successfully'),
+                    backgroundColor: Colors.green,
+                  ),
+                );
+              }
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.orange,
+              foregroundColor: Colors.white,
+            ),
+            child: Text('Regenerate'),
+          ),
+        ],
+      ),
+    );
   }
 }
 

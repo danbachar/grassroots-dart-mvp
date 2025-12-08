@@ -1,6 +1,9 @@
 /// Protocol constants from the specification
 
 // GATT Service/Characteristic UUIDs
+// Fixed Grassroots service UUID - all Grassroots devices advertise this
+const String GRASSROOTS_SERVICE_UUID = 'A1B2C3D4-E5F6-4A5B-8C9D-0E1F2A3B4C5D';
+
 const String FIXED_CHARACTERISTIC_UUID = 'A1B2C3D4-E5F6-4A5B-8C9D-0E1F2A3B4C5D';
 
 // Dedicated characteristic for friend requests (sender connects and writes)
