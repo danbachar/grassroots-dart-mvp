@@ -118,22 +118,17 @@ class ReadReceiptPayload extends MessagePayload {
 
 /// Friend request payload (0x20)
 class FriendRequestPayload extends MessagePayload {
-  final Uint8List requesterPk;      // 32 bytes Curve25519
-  final Uint8List requesterSignPk;  // 32 bytes Ed25519
+  final Uint8List publicKey;       // 32 bytes Ed25519
   final String displayName;
-  final Uint8List? signature;       // 64 bytes Ed25519 signature
+  final Uint8List? signature;      // 64 bytes Ed25519 signature
 
   FriendRequestPayload({
-    required this.requesterPk,
-    required this.requesterSignPk,
+    required this.publicKey,
     required this.displayName,
     this.signature,
   }) {
-    if (requesterPk.length != 32) {
-      throw ArgumentError('Requester PK must be 32 bytes');
-    }
-    if (requesterSignPk.length != 32) {
-      throw ArgumentError('Requester Sign PK must be 32 bytes');
+    if (publicKey.length != 32) {
+      throw ArgumentError('Public key must be 32 bytes');
     }
     if (displayName.length > 63) {
       throw ArgumentError('Display name must be <= 63 bytes');
@@ -151,8 +146,7 @@ class FriendRequestPayload extends MessagePayload {
     final nameBytes = utf8.encode(displayName);
     final buffer = BytesBuilder();
 
-    buffer.add(requesterPk);
-    buffer.add(requesterSignPk);
+    buffer.add(publicKey);
     buffer.addByte(nameBytes.length);
     buffer.add(nameBytes);
     if (signature != null) {
@@ -163,29 +157,27 @@ class FriendRequestPayload extends MessagePayload {
   }
 
   static FriendRequestPayload deserialize(Uint8List bytes) {
-    if (bytes.length < 65) {  // 32 + 32 + 1 minimum
+    if (bytes.length < 33) {  // 32 + 1 minimum
       throw FormatException('Friend request payload too short');
     }
 
-    final requesterPk = bytes.sublist(0, 32);
-    final requesterSignPk = bytes.sublist(32, 64);
-    final nameLength = bytes[64];
+    final publicKey = bytes.sublist(0, 32);
+    final nameLength = bytes[32];
 
-    if (bytes.length < 65 + nameLength) {
+    if (bytes.length < 33 + nameLength) {
       throw FormatException('Name length exceeds payload size');
     }
 
-    final nameBytes = bytes.sublist(65, 65 + nameLength);
+    final nameBytes = bytes.sublist(33, 33 + nameLength);
     final displayName = utf8.decode(nameBytes);
 
     Uint8List? signature;
-    if (bytes.length >= 65 + nameLength + 64) {
-      signature = bytes.sublist(65 + nameLength, 65 + nameLength + 64);
+    if (bytes.length >= 33 + nameLength + 64) {
+      signature = bytes.sublist(33 + nameLength, 33 + nameLength + 64);
     }
 
     return FriendRequestPayload(
-      requesterPk: requesterPk,
-      requesterSignPk: requesterSignPk,
+      publicKey: publicKey,
       displayName: displayName,
       signature: signature,
     );
@@ -194,22 +186,17 @@ class FriendRequestPayload extends MessagePayload {
 
 /// Friend accept payload (0x21)
 class FriendAcceptPayload extends MessagePayload {
-  final Uint8List accepterPk;      // 32 bytes Curve25519
-  final Uint8List accepterSignPk;  // 32 bytes Ed25519
+  final Uint8List publicKey;      // 32 bytes Ed25519
   final String displayName;
-  final Uint8List? signature;      // 64 bytes Ed25519 signature
+  final Uint8List? signature;     // 64 bytes Ed25519 signature
 
   FriendAcceptPayload({
-    required this.accepterPk,
-    required this.accepterSignPk,
+    required this.publicKey,
     required this.displayName,
     this.signature,
   }) {
-    if (accepterPk.length != 32) {
-      throw ArgumentError('Accepter PK must be 32 bytes');
-    }
-    if (accepterSignPk.length != 32) {
-      throw ArgumentError('Accepter Sign PK must be 32 bytes');
+    if (publicKey.length != 32) {
+      throw ArgumentError('Public key must be 32 bytes');
     }
     if (displayName.length > 63) {
       throw ArgumentError('Display name must be <= 63 bytes');
@@ -227,8 +214,7 @@ class FriendAcceptPayload extends MessagePayload {
     final nameBytes = utf8.encode(displayName);
     final buffer = BytesBuilder();
 
-    buffer.add(accepterPk);
-    buffer.add(accepterSignPk);
+    buffer.add(publicKey);
     buffer.addByte(nameBytes.length);
     buffer.add(nameBytes);
     if (signature != null) {
@@ -239,29 +225,27 @@ class FriendAcceptPayload extends MessagePayload {
   }
 
   static FriendAcceptPayload deserialize(Uint8List bytes) {
-    if (bytes.length < 65) {  // 32 + 32 + 1 minimum
+    if (bytes.length < 33) {  // 32 + 1 minimum
       throw FormatException('Friend accept payload too short');
     }
 
-    final accepterPk = bytes.sublist(0, 32);
-    final accepterSignPk = bytes.sublist(32, 64);
-    final nameLength = bytes[64];
+    final publicKey = bytes.sublist(0, 32);
+    final nameLength = bytes[32];
 
-    if (bytes.length < 65 + nameLength) {
+    if (bytes.length < 33 + nameLength) {
       throw FormatException('Name length exceeds payload size');
     }
 
-    final nameBytes = bytes.sublist(65, 65 + nameLength);
+    final nameBytes = bytes.sublist(33, 33 + nameLength);
     final displayName = utf8.decode(nameBytes);
 
     Uint8List? signature;
-    if (bytes.length >= 65 + nameLength + 64) {
-      signature = bytes.sublist(65 + nameLength, 65 + nameLength + 64);
+    if (bytes.length >= 33 + nameLength + 64) {
+      signature = bytes.sublist(33 + nameLength, 33 + nameLength + 64);
     }
 
     return FriendAcceptPayload(
-      accepterPk: accepterPk,
-      accepterSignPk: accepterSignPk,
+      publicKey: publicKey,
       displayName: displayName,
       signature: signature,
     );

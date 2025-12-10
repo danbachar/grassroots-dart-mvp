@@ -24,7 +24,7 @@ class FriendshipService {
     
     final dbFriends = await _db.getAllFriends();
     for (final friend in dbFriends) {
-      final key = _peerIdToString(friend.peerId);
+      final key = _publicKeyToString(friend.publicKey);
       _friends[key] = friend;
     }
     _initialized = true;
@@ -35,20 +35,20 @@ class FriendshipService {
   List<Peer> get friends => _friends.values.toList();
 
   /// Check if peer is a friend
-  bool isFriend(Uint8List peerId) {
-    final key = _peerIdToString(peerId);
+  bool isFriend(Uint8List publicKey) {
+    final key = _publicKeyToString(publicKey);
     return _friends.containsKey(key);
   }
 
-  /// Get friend by peer ID
-  Peer? getFriend(Uint8List peerId) {
-    final key = _peerIdToString(peerId);
+  /// Get friend by public key
+  Peer? getFriend(Uint8List publicKey) {
+    final key = _publicKeyToString(publicKey);
     return _friends[key];
   }
 
   /// Add a friend to the list
   void addFriend(Peer peer) {
-    final key = _peerIdToString(peer.peerId);
+    final key = _publicKeyToString(peer.publicKey);
     _friends[key] = peer;
 
     // Clear any pending request or cooldown
@@ -60,25 +60,22 @@ class FriendshipService {
   }
 
   /// Remove a friend from the list
-  void removeFriend(Uint8List peerId) {
-    final key = _peerIdToString(peerId);
+  void removeFriend(Uint8List publicKey) {
+    final key = _publicKeyToString(publicKey);
     _friends.remove(key);
-    
+
     // Remove from database (fire and forget)
-    _db.deleteFriend(peerId);
+    _db.deleteFriend(publicKey);
   }
 
   /// Create a friend request packet
   Packet createFriendRequest({
-    required Uint8List myPeerId,
-    required Uint8List myNoisePk,
-    required Uint8List mySignPk,
+    required Uint8List myPublicKey,
     required String myDisplayName,
     required Uint8List recipientId,
   }) {
     final payload = FriendRequestPayload(
-      requesterPk: myNoisePk,
-      requesterSignPk: mySignPk,
+      publicKey: myPublicKey,
       displayName: myDisplayName,
       // signature: null, // TODO: Add signature when crypto is implemented
     );
@@ -86,13 +83,13 @@ class FriendshipService {
     final packet = Packet(
       type: MessageType.friendRequest,
       flags: PacketFlags.hasRecipient,
-      senderId: myPeerId,
+      senderId: myPublicKey,
       recipientId: recipientId,
       payload: payload.serialize(),
     );
 
     // Track pending request
-    final key = _peerIdToString(recipientId);
+    final key = _publicKeyToString(recipientId);
     _pendingRequests[key] = DateTime.now();
 
     return packet;
@@ -109,13 +106,11 @@ class FriendshipService {
     }
 
     final payload = FriendRequestPayload.deserialize(packet.payload);
-    final peerId = packet.senderId!;
+    final publicKey = payload.publicKey;
 
     // Create and return peer object
     return Peer(
-      peerId: peerId,
-      noisePk: payload.requesterPk,
-      signPk: payload.requesterSignPk,
+      publicKey: publicKey,
       displayName: payload.displayName,
       isVerified: false,
     );
@@ -123,15 +118,12 @@ class FriendshipService {
 
   /// Create friend accept packet
   Packet createFriendAccept({
-    required Uint8List myPeerId,
-    required Uint8List myNoisePk,
-    required Uint8List mySignPk,
+    required Uint8List myPublicKey,
     required String myDisplayName,
     required Uint8List recipientId,
   }) {
     final payload = FriendAcceptPayload(
-      accepterPk: myNoisePk,
-      accepterSignPk: mySignPk,
+      publicKey: myPublicKey,
       displayName: myDisplayName,
       // signature: null, // TODO: Add signature when crypto is implemented
     );
@@ -139,7 +131,7 @@ class FriendshipService {
     return Packet(
       type: MessageType.friendAccept,
       flags: PacketFlags.hasRecipient,
-      senderId: myPeerId,
+      senderId: myPublicKey,
       recipientId: recipientId,
       payload: payload.serialize(),
     );
@@ -155,13 +147,11 @@ class FriendshipService {
     }
 
     final payload = FriendAcceptPayload.deserialize(packet.payload);
-    final peerId = packet.senderId!;
+    final publicKey = payload.publicKey;
 
     // Create peer object
     final peer = Peer(
-      peerId: peerId,
-      noisePk: payload.accepterPk,
-      signPk: payload.accepterSignPk,
+      publicKey: publicKey,
       displayName: payload.displayName,
       isVerified: false,
     );
@@ -174,7 +164,7 @@ class FriendshipService {
 
   /// Create friend reject packet
   Packet createFriendReject({
-    required Uint8List myPeerId,
+    required Uint8List myPublicKey,
     required Uint8List recipientId,
   }) {
     final payload = FriendRejectPayload();
@@ -182,7 +172,7 @@ class FriendshipService {
     return Packet(
       type: MessageType.friendReject,
       flags: PacketFlags.hasRecipient,
-      senderId: myPeerId,
+      senderId: myPublicKey,
       recipientId: recipientId,
       payload: payload.serialize(),
     );
@@ -198,7 +188,7 @@ class FriendshipService {
     }
 
     final peerId = packet.senderId!;
-    final key = _peerIdToString(peerId);
+    final key = _publicKeyToString(peerId);
 
     // Clear pending request
     _pendingRequests.remove(key);
@@ -210,9 +200,7 @@ class FriendshipService {
   /// Accept a friend request
   /// Returns the accept packet to send
   Packet acceptFriendRequest({
-    required Uint8List myPeerId,
-    required Uint8List myNoisePk,
-    required Uint8List mySignPk,
+    required Uint8List myPublicKey,
     required String myDisplayName,
     required Peer requester,
   }) {
@@ -221,41 +209,39 @@ class FriendshipService {
 
     // Create and return accept packet
     return createFriendAccept(
-      myPeerId: myPeerId,
-      myNoisePk: myNoisePk,
-      mySignPk: mySignPk,
+      myPublicKey: myPublicKey,
       myDisplayName: myDisplayName,
-      recipientId: requester.peerId,
+      recipientId: requester.publicKey,
     );
   }
 
   /// Reject a friend request
   /// Returns the reject packet to send
   Packet rejectFriendRequest({
-    required Uint8List myPeerId,
+    required Uint8List myPublicKey,
     required Peer requester,
   }) {
-    final key = _peerIdToString(requester.peerId);
+    final key = _publicKeyToString(requester.publicKey);
 
     // Set cooldown
     _rejectionCooldowns[key] = DateTime.now();
 
     // Create and return reject packet
     return createFriendReject(
-      myPeerId: myPeerId,
-      recipientId: requester.peerId,
+      myPublicKey: myPublicKey,
+      recipientId: requester.publicKey,
     );
   }
 
   /// Check if there's a pending request to this peer
-  bool hasPendingRequest(Uint8List peerId) {
-    final key = _peerIdToString(peerId);
+  bool hasPendingRequest(Uint8List publicKey) {
+    final key = _publicKeyToString(publicKey);
     return _pendingRequests.containsKey(key);
   }
 
   /// Check if peer is on cooldown (recently rejected us)
-  bool isOnCooldown(Uint8List peerId) {
-    final key = _peerIdToString(peerId);
+  bool isOnCooldown(Uint8List publicKey) {
+    final key = _publicKeyToString(publicKey);
     final cooldown = _rejectionCooldowns[key];
     if (cooldown == null) return false;
 
@@ -263,8 +249,8 @@ class FriendshipService {
     return elapsed.inMilliseconds < Timeouts.friendCooldown;
   }
 
-  /// Helper: Convert peer ID to string key
-  String _peerIdToString(Uint8List peerId) {
-    return peerId.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
+  /// Helper: Convert public key to string key
+  String _publicKeyToString(Uint8List publicKey) {
+    return publicKey.map((b) => b.toRadixString(16).padLeft(2, '0')).join();
   }
 }

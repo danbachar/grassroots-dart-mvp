@@ -4,8 +4,8 @@ import '../protocol/constants.dart';
 /// Represents a chat message
 class Message {
   final Uint8List messageId;    // 16 bytes UUID
-  final Uint8List senderId;     // 8 bytes PeerID
-  final Uint8List? recipientId; // 8 bytes PeerID (null for broadcast)
+  final Uint8List senderId;     // 32 bytes Ed25519 public key
+  final Uint8List? recipientId; // 32 bytes Ed25519 public key (null for broadcast)
   final String content;
   final DateTime timestamp;
   final int status;             // MessageStatus constant
@@ -25,11 +25,11 @@ class Message {
     if (messageId.length != 16) {
       throw ArgumentError('Message ID must be 16 bytes');
     }
-    if (senderId.length != 8) {
-      throw ArgumentError('Sender ID must be 8 bytes');
+    if (senderId.length != 32) {
+      throw ArgumentError('Sender ID must be 32 bytes (Ed25519 public key)');
     }
-    if (recipientId != null && recipientId!.length != 8) {
-      throw ArgumentError('Recipient ID must be 8 bytes');
+    if (recipientId != null && recipientId!.length != 32) {
+      throw ArgumentError('Recipient ID must be 32 bytes (Ed25519 public key)');
     }
   }
 

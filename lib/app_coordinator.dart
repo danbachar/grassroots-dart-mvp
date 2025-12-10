@@ -1,14 +1,11 @@
 import 'dart:async';
 import 'dart:typed_data';
-import 'package:ble_peripheral/ble_peripheral.dart';
 import 'package:bluetooth_low_energy/bluetooth_low_energy.dart'
     hide ConnectionState;
 import 'package:bluetooth_low_energy/bluetooth_low_energy.dart'
     as ble
     show ConnectionState;
 import 'package:flutter/material.dart' hide ConnectionState;
-import 'package:shared_preferences/shared_preferences.dart';
-import 'package:uuid/uuid.dart';
 
 import 'ble/ble_manager.dart';
 import 'models/message.dart';
@@ -17,6 +14,7 @@ import 'protocol/constants.dart';
 import 'protocol/packet.dart';
 import 'services/database_service.dart';
 import 'services/friendship_service.dart';
+import 'services/identity_service.dart';
 import 'services/message_service.dart';
 import 'services/privacy_service.dart';
 
@@ -28,26 +26,19 @@ import 'services/privacy_service.dart';
 /// - To send any message, sender connects to target, writes to characteristic, disconnects
 /// - Three characteristics: friend requests, friend responses, messages
 class AppCoordinator extends ChangeNotifier {
-  // My identity (persisted)
-  late Uint8List myPeerId; // Derived from service UUID
-  late Uint8List myNoisePk;
-  late Uint8List mySignPk;
-  String _myDisplayName = 'Grassroots User';
-  
-  // My service UUID (persisted, used for advertising and identity)
-  String _myServiceUUID = '';
-  static const String _serviceUUIDKey = 'grassroots_service_uuid';
-  static const String _displayNameKey = 'grassroots_display_name';
-  
-  /// Get the current service UUID
-  String get myServiceUUID => _myServiceUUID;
-  
   /// Get the current display name
-  String get myDisplayName => _myDisplayName;
+  String get myDisplayName => _identityService.displayName;
+
+  /// Get my public key (Ed25519, 32 bytes) - this IS my identity
+  Uint8List get myPublicKey => _identityService.publicKey;
+
+  /// Get my service UUID (derived from public key)
+  String get myServiceUUID => _identityService.deriveServiceUUID();
 
   // Managers and services
   final BLEManager _bleManager;
   final DatabaseService _databaseService;
+  final IdentityService _identityService;
   late final FriendshipService _friendshipService;
   late final MessageService _messageService;
   final PrivacyService _privacyService;
@@ -65,8 +56,6 @@ class AppCoordinator extends ChangeNotifier {
   // Pending operations - temporarily store info for async operations
   final Map<String, DiscoveredEventArgs> _pendingFriendRequests =
       {}; // peripheralId -> device (waiting for connection)
-  final Map<String, Peer> _pendingResponses =
-      {}; // peripheralId -> requester (waiting to send accept/reject)
 
   // Pending message queue for offline delivery
   final Map<String, List<Packet>> _pendingMessages = {}; // peerIdHex -> packets
@@ -76,6 +65,9 @@ class AppCoordinator extends ChangeNotifier {
 
   // Track friends we're currently auto-connecting to (prevent duplicate connections)
   final Set<String> _autoConnectingTo = {}; // peerIdHex
+
+  // Track the deviceId of requesters so we can notify them back
+  final Map<String, Peer> _friendRequestSenders = {}; // deviceId -> requester
 
   // Device cache with timestamps (10-minute TTL)
   // peripheralId -> (DiscoveredEventArgs, DateTime lastSeen)
@@ -108,112 +100,43 @@ class AppCoordinator extends ChangeNotifier {
   AppCoordinator()
     : _bleManager = BLEManager(),
       _databaseService = DatabaseService(),
+      _identityService = IdentityService(),
       _privacyService = PrivacyService() {
     // Initialize services with shared database instance
     _friendshipService = FriendshipService(_databaseService);
     _messageService = MessageService(_databaseService);
-    _initializeIdentity();
     _setupBLECallbacks();
   }
 
-  /// Initialize identity (temporary implementation for noise/sign keys)
-  void _initializeIdentity() {
-    // Initialize placeholder keys (will be properly generated later)
-    myPeerId = Uint8List(8); // Will be derived from service UUID
-    myNoisePk = Uint8List(32);
-    mySignPk = Uint8List(32);
+  /// Regenerate identity (new key pairs, new service UUID)
+  Future<void> regenerateIdentity() async {
+    await _identityService.generateNewIdentity();
 
-    // Fill noise/sign keys with random-ish data (not cryptographically secure, just for testing)
-    for (int i = 0; i < 32; i++) {
-      myNoisePk[i] = (DateTime.now().millisecondsSinceEpoch + i) % 256;
-      mySignPk[i] = (DateTime.now().millisecondsSinceEpoch + i + 100) % 256;
-    }
-  }
-  
-  /// Load or generate the service UUID and display name
-  Future<void> _loadOrGenerateServiceUUID() async {
-    final prefs = await SharedPreferences.getInstance();
-    
-    // Load display name
-    final storedName = prefs.getString(_displayNameKey);
-    if (storedName != null && storedName.isNotEmpty) {
-      _myDisplayName = storedName;
-      print('Loaded Display Name: $_myDisplayName');
-    }
-    
-    // Load or generate service UUID
-    final storedUUID = prefs.getString(_serviceUUIDKey);
-    if (storedUUID != null && storedUUID.isNotEmpty) {
-      _myServiceUUID = storedUUID;
-      print('Loaded Service UUID: $_myServiceUUID');
-    } else {
-      await regenerateServiceUUID();
-    }
-    
-    // Derive peer ID from service UUID (first 8 bytes)
-    _derivePeerIdFromServiceUUID();
-  }
-  
-  /// Derive the 8-byte peer ID from the service UUID
-  void _derivePeerIdFromServiceUUID() {
-    // Remove dashes from UUID and take first 16 hex chars (8 bytes)
-    final uuidHex = _myServiceUUID.replaceAll('-', '');
-    if (uuidHex.length >= 16) {
-      myPeerId = _hexToBytes(uuidHex.substring(0, 16));
-      print('Derived Peer ID: ${_bytesToHex(myPeerId)}');
-    }
-  }
-  
-  /// Convert hex string to bytes
-  Uint8List _hexToBytes(String hex) {
-    final result = Uint8List(hex.length ~/ 2);
-    for (int i = 0; i < hex.length; i += 2) {
-      result[i ~/ 2] = int.parse(hex.substring(i, i + 2), radix: 16);
-    }
-    return result;
-  }
-  
-  /// Regenerate the service UUID (new identity)
-  Future<void> regenerateServiceUUID() async {
-    final uuidGen = Uuid();
-    _myServiceUUID = uuidGen.v4().toUpperCase();
-    
-    // Persist the new UUID
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_serviceUUIDKey, _myServiceUUID);
-    
-    // Derive new peer ID from new service UUID
-    _derivePeerIdFromServiceUUID();
-    
-    print('Generated new Service UUID: $_myServiceUUID');
-    
-    // Restart advertising with new UUID if currently advertising
+    print('Generated new identity');
+    print('Service UUID: $myServiceUUID');
+    print('Public Key: ${_bytesToHex(myPublicKey)}');
+
+    // Restart advertising with new identity if currently advertising
     if (_bleManager.isAdvertising) {
       await stopAdvertising();
       await startAdvertising();
     }
-    
+
     notifyListeners();
   }
   
   /// Update the display name
   Future<void> setDisplayName(String name) async {
     if (name.trim().isEmpty) return;
-    
-    _myDisplayName = name.trim();
-    
-    // Persist the new name
-    final prefs = await SharedPreferences.getInstance();
-    await prefs.setString(_displayNameKey, _myDisplayName);
-    
-    print('Updated Display Name: $_myDisplayName');
-    
+
+    await _identityService.setDisplayName(name);
+
     // Restart advertising with new name if currently advertising
     if (_bleManager.isAdvertising) {
       await stopAdvertising();
       await startAdvertising();
     }
-    
+
     notifyListeners();
   }
 
@@ -226,9 +149,13 @@ class AppCoordinator extends ChangeNotifier {
 
   /// Initialize BLE (request permissions) and start continuous operation
   Future<void> initialize() async {
-    // Load or generate service UUID first
-    await _loadOrGenerateServiceUUID();
-    
+    // Initialize cryptographic identity (load or generate keys and display name)
+    await _identityService.initialize();
+    print('Identity initialized');
+    print('Service UUID: $myServiceUUID');
+    print('Public Key: ${_bytesToHex(myPublicKey)}');
+    print('Display Name: $myDisplayName');
+
     // Load persisted data from database
     await _friendshipService.initialize();
     await _messageService.initialize();
@@ -480,9 +407,17 @@ class AppCoordinator extends ChangeNotifier {
     }
 
     // Use display name if privacy allows, otherwise use generic name
-    final name = _privacyService.shouldAdvertiseName
-        ? _myDisplayName
-        : 'Grassroots';
+    // Truncate to 10 chars max to fit in BLE advertising packet (31 bytes total)
+    // 128-bit UUID (18 bytes) + name (10 bytes) + flags (3 bytes) = 31 bytes
+    String name;
+    if (_privacyService.shouldAdvertiseName) {
+      name = myDisplayName.length > 10
+          ? myDisplayName.substring(0, 10)
+          : myDisplayName;
+    } else {
+      name = 'Grassroots'; // 10 chars
+    }
+
     print("Starting advertising as $name with UUID $myServiceUUID in appCoordinator");
     await _bleManager.startAdvertising(
       serviceUUID: myServiceUUID,
@@ -499,7 +434,7 @@ class AppCoordinator extends ChangeNotifier {
   // ==================== Friend Requests ====================
 
   /// Send a friend request to a discovered device
-  /// New architecture: connect -> write to FRIEND_REQUEST characteristic -> stay connected for response
+  /// With auto-connect: devices should already be connected, just write directly
   Future<void> sendFriendRequest(DiscoveredEventArgs deviceArgs) async {
     final peripheral = deviceArgs.peripheral;
     final peripheralId = peripheral.uuid.toString();
@@ -507,22 +442,91 @@ class AppCoordinator extends ChangeNotifier {
 
     print('Sending friend request to $deviceName ($peripheralId)...');
 
-    // Store pending operation
-    _pendingFriendRequests[peripheralId] = deviceArgs;
-    
     // Track as pending outgoing request (for UI to show greyed out state)
     _pendingOutgoingRequests.add(peripheralId);
     notifyListeners();
 
-    // Connect via BLE (rest happens in _handleConnectionChanged)
-    await _bleManager.connect(peripheral);
+    // Check if already connected and services are cached
+    if (_bleManager.hasDiscoveredServices(peripheralId)) {
+      // Already connected with services cached - send directly!
+      print('Using existing connection to send friend request');
+      await _sendFriendRequestDirect(peripheral, deviceName);
+    } else {
+      // Not connected yet - use old flow via connection callback
+      print('Not yet connected, this should not be possible...');
+      // _pendingFriendRequests[peripheralId] = deviceArgs;
+      // await _bleManager.connect(peripheral);
+    }
+  }
+
+  /// Send friend request directly on an existing connection
+  Future<void> _sendFriendRequestDirect(Peripheral peripheral, String deviceName) async {
+    final peripheralId = peripheral.uuid.toString();
+
+    try {
+      // Get cached services
+      final services = _bleManager.getDiscoveredServices(peripheralId)!;
+
+      // Find friend request and response characteristics
+      GATTCharacteristic? friendRequestChar;
+      GATTCharacteristic? friendResponseChar;
+
+      for (final service in services) {
+        for (final char in service.characteristics) {
+          final charUuid = char.uuid.toString().toLowerCase();
+          if (charUuid == FRIEND_REQUEST_CHARACTERISTIC_UUID.toLowerCase()) {
+            friendRequestChar = char;
+          } else if (charUuid == FRIEND_RESPONSE_CHARACTERISTIC_UUID.toLowerCase()) {
+            friendResponseChar = char;
+          }
+        }
+      }
+
+      if (friendRequestChar == null) {
+        print('Warning: Friend request characteristic not found');
+        return;
+      }
+
+      // Subscribe to friend response to receive accept/reject
+      if (friendResponseChar != null) {
+        try {
+          print('Subscribing to friend response characteristic...');
+          await _bleManager.subscribeToCharacteristic(
+            peripheral: peripheral,
+            characteristic: friendResponseChar,
+          );
+        } catch (e) {
+          print('Warning: Could not subscribe to responses: $e');
+        }
+      }
+
+      // Create and send the friend request
+      final packet = _friendshipService.createFriendRequest(
+        myPublicKey: myPublicKey,
+        myDisplayName: myDisplayName,
+        recipientId: Uint8List(32), // Unknown at this point (32 bytes for public key)
+      );
+
+      final bytes = packet.serialize();
+      print('Sending friend request: ${bytes.length} bytes');
+
+      await _bleManager.writeCharacteristic(
+        peripheral: peripheral,
+        characteristicUUID: UUID.fromString(FRIEND_REQUEST_CHARACTERISTIC_UUID),
+        data: bytes,
+      );
+
+      print('Friend request sent to $deviceName (using existing connection)');
+    } catch (e) {
+      print('Error sending friend request directly: $e');
+    }
   }
 
   /// Accept a friend request from a peer
-  /// New architecture: we're already receiving (they wrote to us), now we connect to them and write response
+  /// Notify the requester who is still connected and subscribed
   Future<void> acceptFriendRequest(Peer requester) async {
     // Check if we already processed this request (prevent double-tap)
-    if (_friendshipService.isFriend(requester.peerId)) {
+    if (_friendshipService.isFriend(requester.publicKey)) {
       print(
         'Already friends with ${requester.displayName}, ignoring duplicate accept',
       );
@@ -531,41 +535,40 @@ class AppCoordinator extends ChangeNotifier {
 
     // Add as friend
     final packet = _friendshipService.acceptFriendRequest(
-      myPeerId: myPeerId,
-      myNoisePk: myNoisePk,
-      mySignPk: mySignPk,
+      myPublicKey: myPublicKey,
       myDisplayName: myDisplayName,
       requester: requester,
     );
 
-    // Find the device to connect to and send response
-    // The requester should have a service UUID derived from their noisePk
-    final serviceUUID = requester.deriveServiceUUID();
-
-    // Look for the device in our discovered devices
-    DiscoveredEventArgs? targetDevice;
-    for (final device in _discoveredDevices.values) {
-      // Check if any advertised service matches
-      for (final uuid in device.advertisement.serviceUUIDs) {
-        if (uuid.toString().toLowerCase() == serviceUUID.toLowerCase()) {
-          targetDevice = device;
-          break;
-        }
+    // Find the deviceId of the requester (they should still be connected)
+    String? requesterDeviceId;
+    for (final entry in _friendRequestSenders.entries) {
+      if (_bytesEqual(entry.value.publicKey, requester.publicKey)) {
+        requesterDeviceId = entry.key;
+        break;
       }
-      if (targetDevice != null) break;
     }
 
-    if (targetDevice != null) {
-      // Connect and send response
-      print('Connecting to requester to send accept...');
-      _pendingResponses[targetDevice.peripheral.uuid.toString()] = requester;
-      await _bleManager.connect(targetDevice.peripheral);
+    if (requesterDeviceId != null) {
+      // Notify the requester with acceptance
+      print('Notifying requester $requesterDeviceId with acceptance...');
+      try {
+        final bytes = packet.serialize();
+        await _bleManager.notifyCharacteristic(
+          deviceId: requesterDeviceId,
+          characteristicId: FRIEND_RESPONSE_CHARACTERISTIC_UUID,
+          data: bytes,
+        );
+        print('Accept notification sent to requester');
+
+        // Clean up
+        _friendRequestSenders.remove(requesterDeviceId);
+      } catch (e) {
+        print('Error notifying requester: $e');
+      }
     } else {
-      // Queue for later delivery when they're discovered
-      print('Requester not in range, queuing response for later');
-      final peerIdHex = _bytesToHex(requester.peerId);
-      _pendingMessages[peerIdHex] ??= [];
-      _pendingMessages[peerIdHex]!.add(packet);
+      print('Requester not connected to receive accept notification');
+      // Friend is added locally, they will see us as friend when they reconnect
     }
 
     notifyListeners();
@@ -573,35 +576,46 @@ class AppCoordinator extends ChangeNotifier {
 
   /// Reject a friend request from a peer
   Future<void> rejectFriendRequest(Peer requester) async {
-    // Create reject packet (will be sent when we connect)
-    // The packet is created but we store the requester for sending
+    // Create reject packet
+    final packet = _friendshipService.rejectFriendRequest(
+      myPublicKey: myPublicKey,
+      requester: requester,
+    );
 
-    // Similar to accept, try to send response
-    final serviceUUID = requester.deriveServiceUUID();
-
-    // Look for the device
-    DiscoveredEventArgs? targetDevice;
-    for (final device in _discoveredDevices.values) {
-      for (final uuid in device.advertisement.serviceUUIDs) {
-        if (uuid.toString().toLowerCase() == serviceUUID.toLowerCase()) {
-          targetDevice = device;
-          break;
-        }
+    // Find the deviceId of the requester (they should still be connected)
+    String? requesterDeviceId;
+    for (final entry in _friendRequestSenders.entries) {
+      if (_bytesEqual(entry.value.publicKey, requester.publicKey)) {
+        requesterDeviceId = entry.key;
+        break;
       }
-      if (targetDevice != null) break;
     }
 
-    if (targetDevice != null) {
-      _pendingResponses[targetDevice.peripheral.uuid.toString()] = requester;
-      await _bleManager.connect(targetDevice.peripheral);
+    if (requesterDeviceId != null) {
+      // Notify the requester with rejection
+      print('Notifying requester $requesterDeviceId with rejection...');
+      try {
+        final bytes = packet.serialize();
+        await _bleManager.notifyCharacteristic(
+          deviceId: requesterDeviceId,
+          characteristicId: FRIEND_RESPONSE_CHARACTERISTIC_UUID,
+          data: bytes,
+        );
+        print('Reject notification sent to requester');
+
+        // Clean up
+        _friendRequestSenders.remove(requesterDeviceId);
+      } catch (e) {
+        print('Error notifying requester: $e');
+      }
     } else {
-      print('Requester not in range, reject not sent');
+      print('Requester not connected to receive reject notification');
     }
   }
 
   /// Remove a friend
   Future<void> removeFriend(Peer friend) async {
-    _friendshipService.removeFriend(friend.peerId);
+    _friendshipService.removeFriend(friend.publicKey);
     print('Removed ${friend.displayName} from friends list');
     notifyListeners();
   }
@@ -611,8 +625,8 @@ class AppCoordinator extends ChangeNotifier {
   /// Send a chat message to a friend
   Future<void> sendMessage(Peer peer, String content) async {
     final packet = _messageService.createChatMessage(
-      senderId: myPeerId,
-      recipientId: peer.peerId,
+      senderId: myPublicKey,
+      recipientId: peer.publicKey,
       content: content,
     );
 
@@ -649,7 +663,7 @@ class AppCoordinator extends ChangeNotifier {
     } else {
       // Queue for later
       print('Friend not in range, queuing message for later');
-      final peerIdHex = _bytesToHex(peer.peerId);
+      final peerIdHex = _bytesToHex(peer.publicKey);
       _pendingMessages[peerIdHex] ??= [];
       _pendingMessages[peerIdHex]!.add(packet);
     }
@@ -657,16 +671,16 @@ class AppCoordinator extends ChangeNotifier {
 
   /// Get chat history with a peer
   List<Message> getChat(Peer peer) {
-    return _messageService.getChat(peer.peerId);
+    return _messageService.getChat(peer.publicKey);
   }
 
   /// Count unread messages from a specific peer
   int getUnreadCount(Peer peer) {
-    final messages = _messageService.getChat(peer.peerId);
+    final messages = _messageService.getChat(peer.publicKey);
     int count = 0;
     for (final message in messages) {
       // Count messages FROM this peer that aren't read yet
-      final isFromPeer = !_bytesEqual(message.senderId, myPeerId);
+      final isFromPeer = !_bytesEqual(message.senderId, myPublicKey);
       if (isFromPeer && message.status != MessageStatus.read) {
         count++;
       }
@@ -682,13 +696,13 @@ class AppCoordinator extends ChangeNotifier {
   /// Mark all messages from a peer as read (when user opens the chat)
   /// Also sends read receipts to the peer if they're in range
   Future<void> markMessagesAsRead(Peer peer) async {
-    final messages = _messageService.getChat(peer.peerId);
+    final messages = _messageService.getChat(peer.publicKey);
     final unreadMessages = <Message>[];
 
     // Find messages from this peer that aren't yet marked as read
     for (final message in messages) {
       // Only mark messages FROM the friend (not our own messages)
-      final isFromFriend = !_bytesEqual(message.senderId, myPeerId);
+      final isFromFriend = !_bytesEqual(message.senderId, myPublicKey);
       if (isFromFriend && message.status != MessageStatus.read) {
         _messageService.markAsRead(message.messageId);
         unreadMessages.add(message);
@@ -717,8 +731,8 @@ class AppCoordinator extends ChangeNotifier {
       // Send read receipts for each message
       for (final message in unreadMessages) {
         final packet = _messageService.createReadReceipt(
-          senderId: myPeerId,
-          recipientId: peer.peerId,
+          senderId: myPublicKey,
+          recipientId: peer.publicKey,
           messageId: message.messageId,
         );
         // Fire and forget - don't wait for each one
@@ -739,7 +753,7 @@ class AppCoordinator extends ChangeNotifier {
     // Find sender in friends list to get their service UUID
     Peer? sender;
     for (final friend in friends) {
-      if (_bytesEqual(friend.peerId, senderPeerId)) {
+      if (_bytesEqual(friend.publicKey, senderPeerId)) {
         sender = friend;
         break;
       }
@@ -766,7 +780,7 @@ class AppCoordinator extends ChangeNotifier {
     
     if (targetDevice != null) {
       final packet = _messageService.createReadReceipt(
-        senderId: myPeerId,
+        senderId: myPublicKey,
         recipientId: senderPeerId,
         messageId: message.messageId,
       );
@@ -792,7 +806,7 @@ class AppCoordinator extends ChangeNotifier {
 
   /// Set the currently active/open chat (for immediate read receipts)
   void setActiveChat(Peer? peer) {
-    _activeChatPeerId = peer?.peerId;
+    _activeChatPeerId = peer?.publicKey;
     print('Active chat set to: ${peer?.displayName ?? "none"}');
   }
 
@@ -816,13 +830,21 @@ class AppCoordinator extends ChangeNotifier {
     print('Connecting to $peripheralId to send packet...');
 
     try {
+      // Only connect if not already connected
       await _bleManager.connect(peripheral);
 
       // Wait a bit for connection to establish
       await Future.delayed(Duration(milliseconds: 500));
 
-      // Discover services
-      final services = await _bleManager.discoverServices(peripheral);
+      // Check if we already have discovered services cached
+      List<GATTService> services;
+      if (_bleManager.hasDiscoveredServices(peripheralId)) {
+        print('Reusing cached services for $peripheralId');
+        services = _bleManager.getDiscoveredServices(peripheralId)!;
+      } else {
+        // Discover services
+        services = await _bleManager.discoverServices(peripheral);
+      }
 
       // Find the characteristic
       GATTCharacteristic? targetChar;
@@ -839,7 +861,7 @@ class AppCoordinator extends ChangeNotifier {
 
       if (targetChar == null) {
         print('Warning: Characteristic $characteristicUUID not found');
-        await _bleManager.disconnect(peripheral);
+        // Keep connection alive - maybe characteristics will appear later or for other operations
         return false;
       }
 
@@ -860,14 +882,12 @@ class AppCoordinator extends ChangeNotifier {
         notifyListeners();
       }
 
-      print('Packet sent, disconnecting...');
-      await _bleManager.disconnect(peripheral);
+      print('Packet sent successfully');
+      // Keep connection alive for multi-hop routing - don't disconnect
       return true;
     } catch (e) {
       print('Error in connect-and-send: $e');
-      try {
-        await _bleManager.disconnect(peripheral);
-      } catch (_) {}
+      // On error, still keep connection - it will be cleaned up by connection state monitoring
       return false;
     }
   }
@@ -875,10 +895,10 @@ class AppCoordinator extends ChangeNotifier {
   // ==================== Internal Handlers ====================
 
   void _handleDeviceDiscovered(DiscoveredEventArgs eventArgs) {
-    var arr = eventArgs.advertisement.manufacturerSpecificData;
-    for (final data in arr) {
-      print('Manufacturer ID=${data.id}, Data=${data.data}');
-    }
+    // var arr = eventArgs.advertisement.manufacturerSpecificData;
+    // for (final data in arr) {
+    //   print('Manufacturer ID=${data.id}, Data=${data.data}');
+    // }
     // print(eventArgs.advertisement.manufacturerSpecificData)
     final peripheralId = eventArgs.peripheral.uuid.toString();
 
@@ -938,9 +958,12 @@ class AppCoordinator extends ChangeNotifier {
       if (name != null && name.isNotEmpty) {
         _compatibleDevices.add(peripheralId);
         print('Device $name marked as compatible (has service UUIDs)');
-        
+
         // Add to nearby peers list
         _addOrUpdateNearbyPeer(device);
+
+        // Auto-connect to nearby Grassroots peer for multi-hop routing
+        _autoConnectToNearbyPeer(device);
       }
     }
   }
@@ -958,26 +981,22 @@ class AppCoordinator extends ChangeNotifier {
     if (existingIndex >= 0) {
       // Update existing peer with fresh peripheral reference
       _nearbyPeers[existingIndex] = Peer(
-        peerId: _nearbyPeers[existingIndex].peerId,
-        noisePk: _nearbyPeers[existingIndex].noisePk,
-        signPk: _nearbyPeers[existingIndex].signPk,
+        publicKey: _nearbyPeers[existingIndex].publicKey,
         displayName: deviceName,
         peripheral: device.peripheral,
         isVerified: false,
       );
     } else {
-      // Create a temporary peer ID based on peripheral UUID
-      // This will be replaced with actual peer ID after identity exchange
-      final tempPeerId = Uint8List(8);
+      // Create a temporary public key based on peripheral UUID
+      // This will be replaced with actual public key after identity exchange
+      final tempPublicKey = Uint8List(32);
       final peripheralBytes = peripheralId.codeUnits;
-      for (int i = 0; i < 8 && i < peripheralBytes.length; i++) {
-        tempPeerId[i] = peripheralBytes[i] % 256;
+      for (int i = 0; i < 32 && i < peripheralBytes.length; i++) {
+        tempPublicKey[i] = peripheralBytes[i] % 256;
       }
       
       final newPeer = Peer(
-        peerId: tempPeerId,
-        noisePk: Uint8List(32), // Empty until identity exchange
-        signPk: Uint8List(32),  // Empty until identity exchange
+        publicKey: tempPublicKey,
         displayName: deviceName,
         peripheral: device.peripheral,
         isVerified: false,
@@ -998,9 +1017,7 @@ class AppCoordinator extends ChangeNotifier {
       // Update peripheral reference to keep it fresh
       final existing = _nearbyPeers[existingIndex];
       _nearbyPeers[existingIndex] = Peer(
-        peerId: existing.peerId,
-        noisePk: existing.noisePk,
-        signPk: existing.signPk,
+        publicKey: existing.publicKey,
         displayName: device.advertisement.name ?? existing.displayName,
         peripheral: device.peripheral,
         isVerified: existing.isVerified,
@@ -1016,7 +1033,7 @@ class AppCoordinator extends ChangeNotifier {
       // Check if this device advertises the friend's service UUID
       for (final uuid in device.advertisement.serviceUUIDs) {
         if (uuid.toString().toLowerCase() == serviceUUID.toLowerCase()) {
-          final peerIdHex = _bytesToHex(friend.peerId);
+          final peerIdHex = _bytesToHex(friend.publicKey);
 
           // Mark friend as in range
           if (!_friendsInRange.contains(peerIdHex)) {
@@ -1034,12 +1051,46 @@ class AppCoordinator extends ChangeNotifier {
     }
   }
 
+  /// Auto-connect to a nearby Grassroots peer for multi-hop routing
+  Future<void> _autoConnectToNearbyPeer(DiscoveredEventArgs device) async {
+    final peripheralId = device.peripheral.uuid.toString();
+    final deviceName = device.advertisement.name ?? 'Unknown';
+
+    // Prevent duplicate connection attempts (use peripheral ID as key)
+    if (_autoConnectingTo.contains(peripheralId)) {
+      return;
+    }
+
+    _autoConnectingTo.add(peripheralId);
+    print('Auto-connecting to nearby peer $deviceName ($peripheralId)...');
+
+    try {
+      // Connect to the peer
+      await _bleManager.connect(device.peripheral);
+      print('Auto-connected to $deviceName');
+
+      // Wait for connection to stabilize
+      await Future.delayed(Duration(milliseconds: 500));
+
+      // Discover and cache services so they're ready for later use
+      final services = await _bleManager.discoverServices(device.peripheral);
+      print('Discovered ${services.length} services for $deviceName');
+
+      // Keep connection alive for multi-hop routing
+      // Don't disconnect - we want to stay connected to all nearby peers
+    } catch (e) {
+      print('Error auto-connecting to nearby peer: $e');
+    } finally {
+      _autoConnectingTo.remove(peripheralId);
+    }
+  }
+
   /// Auto-connect to a friend who came into range
   Future<void> _autoConnectToFriend(
     Peer friend,
     DiscoveredEventArgs device,
   ) async {
-    final peerIdHex = _bytesToHex(friend.peerId);
+    final peerIdHex = _bytesToHex(friend.publicKey);
 
     // Prevent duplicate connection attempts
     if (_autoConnectingTo.contains(peerIdHex)) {
@@ -1073,7 +1124,7 @@ class AppCoordinator extends ChangeNotifier {
       // Check if this device advertises the friend's service UUID
       for (final uuid in device.advertisement.serviceUUIDs) {
         if (uuid.toString().toLowerCase() == serviceUUID.toLowerCase()) {
-          final peerIdHex = _bytesToHex(friend.peerId);
+          final peerIdHex = _bytesToHex(friend.publicKey);
           final pending = _pendingMessages[peerIdHex];
           if (pending != null && pending.isNotEmpty) {
             print('Found device for pending messages to ${friend.displayName}');
@@ -1129,13 +1180,6 @@ class AppCoordinator extends ChangeNotifier {
         _handleFriendRequestConnection(peripheral, pendingRequest);
         return;
       }
-
-      // Check if this is a pending response (accept/reject)
-      final pendingResponse = _pendingResponses.remove(peripheralId);
-      if (pendingResponse != null) {
-        _handleResponseConnection(peripheral, pendingResponse);
-        return;
-      }
     }
 
     notifyListeners();
@@ -1172,7 +1216,7 @@ class AppCoordinator extends ChangeNotifier {
 
       if (friendRequestChar == null) {
         print('Warning: Friend request characteristic not found');
-        await _bleManager.disconnect(peripheral);
+        // Keep connection alive for multi-hop routing
         return;
       }
 
@@ -1191,11 +1235,9 @@ class AppCoordinator extends ChangeNotifier {
 
       // Create and send the friend request
       final packet = _friendshipService.createFriendRequest(
-        myPeerId: myPeerId,
-        myNoisePk: myNoisePk,
-        mySignPk: mySignPk,
+        myPublicKey: myPublicKey,
         myDisplayName: myDisplayName,
-        recipientId: Uint8List(8), // Unknown at this point
+        recipientId: Uint8List(32), // Unknown at this point (32 bytes for public key)
       );
 
       final bytes = packet.serialize();
@@ -1208,83 +1250,10 @@ class AppCoordinator extends ChangeNotifier {
       );
 
       print('Friend request sent to $deviceName');
-      // Stay connected to receive response via notification
+      // Stay connected to receive response via notification and for multi-hop routing
     } catch (e) {
       print('Error sending friend request: $e');
-      try {
-        await _bleManager.disconnect(peripheral);
-      } catch (_) {}
-    }
-  }
-
-  /// Handle connection established for sending a response (accept/reject)
-  Future<void> _handleResponseConnection(
-    Peripheral peripheral,
-    Peer requester,
-  ) async {
-    print('Connected to ${requester.displayName}, sending response...');
-
-    try {
-      final services = await _bleManager.discoverServices(peripheral);
-
-      // Find response characteristic
-      GATTCharacteristic? responseChar;
-      for (final service in services) {
-        for (final char in service.characteristics) {
-          if (char.uuid.toString().toLowerCase() ==
-              FRIEND_RESPONSE_CHARACTERISTIC_UUID.toLowerCase()) {
-            responseChar = char;
-            break;
-          }
-        }
-        if (responseChar != null) break;
-      }
-
-      if (responseChar == null) {
-        print('Warning: Friend response characteristic not found');
-        await _bleManager.disconnect(peripheral);
-        return;
-      }
-
-      // Determine if this is an accept or reject
-      final isFriend = _friendshipService.isFriend(requester.peerId);
-
-      Packet packet;
-      if (isFriend) {
-        // Already friends, this must be an accept we're sending
-        packet = _friendshipService.createFriendAccept(
-          myPeerId: myPeerId,
-          myNoisePk: myNoisePk,
-          mySignPk: mySignPk,
-          myDisplayName: myDisplayName,
-          recipientId: requester.peerId,
-        );
-      } else {
-        // Reject
-        packet = _friendshipService.rejectFriendRequest(
-          myPeerId: myPeerId,
-          requester: requester,
-        );
-      }
-
-      final bytes = packet.serialize();
-      print('Sending response: ${bytes.length} bytes');
-
-      await _bleManager.writeCharacteristic(
-        peripheral: peripheral,
-        characteristicUUID: UUID.fromString(
-          FRIEND_RESPONSE_CHARACTERISTIC_UUID,
-        ),
-        data: bytes,
-      );
-
-      print('Response sent, disconnecting...');
-      await _bleManager.disconnect(peripheral);
-    } catch (e) {
-      print('Error sending response: $e');
-      try {
-        await _bleManager.disconnect(peripheral);
-      } catch (_) {}
+      // Keep connection alive even on error - for multi-hop routing
     }
   }
 
@@ -1308,7 +1277,7 @@ class AppCoordinator extends ChangeNotifier {
         case MessageType.friendAccept:
           final friend = _friendshipService.handleFriendAccept(packet);
           print('Friend request accepted by ${friend.displayName}');
-          
+
           // Clear pending request for this friend (find by service UUID match)
           final acceptedServiceUUID = friend.deriveServiceUUID().toLowerCase();
           String? matchingPeripheralId;
@@ -1324,7 +1293,7 @@ class AppCoordinator extends ChangeNotifier {
           if (matchingPeripheralId != null) {
             _pendingOutgoingRequests.remove(matchingPeripheralId);
           }
-          
+
           // Notify UI for snackbar
           onFriendAdded?.call(friend);
           notifyListeners();
@@ -1333,6 +1302,7 @@ class AppCoordinator extends ChangeNotifier {
         case MessageType.friendReject:
           _friendshipService.handleFriendReject(packet);
           print('Friend request rejected');
+
           notifyListeners();
           break;
 
@@ -1376,20 +1346,24 @@ class AppCoordinator extends ChangeNotifier {
 
   void _handleIncomingFriendRequest(String deviceId, Packet packet) {
     final requester = _friendshipService.handleFriendRequest(packet);
-    print('Received friend request from ${requester.displayName}');
+    print('Received friend request from ${requester.displayName} (deviceId: $deviceId)');
 
     // Check conditions
-    if (_friendshipService.isFriend(requester.peerId)) {
+    if (_friendshipService.isFriend(requester.publicKey)) {
       print('Already friends, ignoring');
       return;
     }
 
-    if (_friendshipService.isOnCooldown(requester.peerId)) {
+    if (_friendshipService.isOnCooldown(requester.publicKey)) {
       print('On cooldown, auto-rejecting');
       // Note: In new architecture, we'd need to connect to them to send reject
       // For now, just ignore
       return;
     }
+
+    // Store deviceId so we can send response later via notification
+    _friendRequestSenders[deviceId] = requester;
+    print('Stored requester deviceId for response');
 
     // Notify UI
     onFriendRequestReceived?.call(requester);

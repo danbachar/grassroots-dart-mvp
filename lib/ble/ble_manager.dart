@@ -266,23 +266,23 @@ class BLEManager {
         ],
       ),
     );
-
+    print("Added GATT service and characteristics");
     // Setup advertising status callback
     BlePeripheral.setAdvertisingStatusUpdateCallback((
       bool advertising,
       String? error,
     ) {
-      print('Advertising status: $advertising, Error: $error');
+      if (error != null) {
+        print('Cannot start advertising, error: $error');
+        print('Advertising status: $advertising');
+      }
     });
 
     // Start advertising
     print('Starting advertising as $deviceName with service $serviceUUID');
-    print("Advertising with manufacturer data");
-    var data = ManufacturerData(manufacturerId: 0x539, data: Uint8List.fromList([0x00]));
     await BlePeripheral.startAdvertising(
       services: [serviceUUID],
       localName: deviceName,
-      manufacturerData: data,
     );
 
     _isAdvertising = true;
@@ -308,6 +308,16 @@ class BLEManager {
   Future<void> disconnect(Peripheral peripheral) async {
     print('Disconnecting from ${peripheral.uuid}...');
     await _central.disconnect(peripheral);
+  }
+
+  /// Check if services have been discovered for a peripheral
+  bool hasDiscoveredServices(String peripheralId) {
+    return _discoveredServices.containsKey(peripheralId);
+  }
+
+  /// Get cached discovered services for a peripheral
+  List<GATTService>? getDiscoveredServices(String peripheralId) {
+    return _discoveredServices[peripheralId];
   }
 
   /// Discover GATT services on a peripheral

@@ -9,7 +9,7 @@ import '../models/message.dart';
 class DatabaseService {
   static Database? _database;
   static const String _databaseName = 'grassroots.db';
-  static const int _databaseVersion = 1;
+  static const int _databaseVersion = 2; // Bumped for single-key refactor
 
   // Table names
   static const String _friendsTable = 'friends';
@@ -37,12 +37,10 @@ class DatabaseService {
 
   /// Create database tables
   Future<void> _onCreate(Database db, int version) async {
-    // Friends table
+    // Friends table - simplified with single public key
     await db.execute('''
       CREATE TABLE $_friendsTable (
-        peer_id TEXT PRIMARY KEY,
-        noise_pk TEXT NOT NULL,
-        sign_pk TEXT NOT NULL,
+        public_key TEXT PRIMARY KEY,
         display_name TEXT NOT NULL,
         added_at INTEGER NOT NULL,
         last_seen INTEGER,
@@ -80,8 +78,27 @@ class DatabaseService {
 
   /// Handle database upgrades
   Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
-    // Handle migrations in future versions
-    print('Database upgraded from v$oldVersion to v$newVersion');
+    print('Database upgrade from v$oldVersion to v$newVersion');
+
+    // Migrate from v1 (multi-key) to v2 (single-key)
+    if (oldVersion < 2) {
+      print('Migrating to v2: single public key architecture');
+
+      // Drop and recreate friends table (simpler than migrating data)
+      // Users will need to re-add friends
+      await db.execute('DROP TABLE IF EXISTS $_friendsTable');
+      await db.execute('''
+        CREATE TABLE $_friendsTable (
+          public_key TEXT PRIMARY KEY,
+          display_name TEXT NOT NULL,
+          added_at INTEGER NOT NULL,
+          last_seen INTEGER,
+          is_verified INTEGER NOT NULL DEFAULT 0
+        )
+      ''');
+
+      print('Friends table recreated with new schema');
+    }
   }
 
   // ==================== Friends CRUD ====================
@@ -104,14 +121,14 @@ class DatabaseService {
     return maps.map((map) => _mapToPeer(map)).toList();
   }
 
-  /// Get a friend by peer ID
-  Future<Peer?> getFriend(Uint8List peerId) async {
+  /// Get a friend by public key
+  Future<Peer?> getFriend(Uint8List publicKey) async {
     final db = await database;
-    final peerIdHex = _bytesToHex(peerId);
+    final publicKeyHex = _bytesToHex(publicKey);
     final maps = await db.query(
       _friendsTable,
-      where: 'peer_id = ?',
-      whereArgs: [peerIdHex],
+      where: 'public_key = ?',
+      whereArgs: [publicKeyHex],
     );
     if (maps.isEmpty) return null;
     return _mapToPeer(maps.first);
@@ -123,36 +140,36 @@ class DatabaseService {
     await db.update(
       _friendsTable,
       _peerToMap(friend),
-      where: 'peer_id = ?',
-      whereArgs: [_bytesToHex(friend.peerId)],
+      where: 'public_key = ?',
+      whereArgs: [_bytesToHex(friend.publicKey)],
     );
   }
 
   /// Update friend's last seen timestamp
-  Future<void> updateFriendLastSeen(Uint8List peerId, DateTime lastSeen) async {
+  Future<void> updateFriendLastSeen(Uint8List publicKey, DateTime lastSeen) async {
     final db = await database;
     await db.update(
       _friendsTable,
       {'last_seen': lastSeen.millisecondsSinceEpoch},
-      where: 'peer_id = ?',
-      whereArgs: [_bytesToHex(peerId)],
+      where: 'public_key = ?',
+      whereArgs: [_bytesToHex(publicKey)],
     );
   }
 
   /// Delete a friend
-  Future<void> deleteFriend(Uint8List peerId) async {
+  Future<void> deleteFriend(Uint8List publicKey) async {
     final db = await database;
     await db.delete(
       _friendsTable,
-      where: 'peer_id = ?',
-      whereArgs: [_bytesToHex(peerId)],
+      where: 'public_key = ?',
+      whereArgs: [_bytesToHex(publicKey)],
     );
     print('Friend deleted from database');
   }
 
   /// Check if a peer is a friend
-  Future<bool> isFriend(Uint8List peerId) async {
-    final friend = await getFriend(peerId);
+  Future<bool> isFriend(Uint8List publicKey) async {
+    final friend = await getFriend(publicKey);
     return friend != null;
   }
 
@@ -177,12 +194,12 @@ class DatabaseService {
 
   /// Get messages for a specific chat (between user and peer)
   Future<List<Message>> getChatMessages(
-    Uint8List myPeerId,
-    Uint8List friendPeerId,
+    Uint8List myPublicKey,
+    Uint8List friendPublicKey,
   ) async {
     final db = await database;
-    final myIdHex = _bytesToHex(myPeerId);
-    final friendIdHex = _bytesToHex(friendPeerId);
+    final myIdHex = _bytesToHex(myPublicKey);
+    final friendIdHex = _bytesToHex(friendPublicKey);
 
     final maps = await db.query(
       _messagesTable,
@@ -243,12 +260,12 @@ class DatabaseService {
 
   /// Delete all messages with a peer
   Future<void> deleteMessagesWithPeer(
-    Uint8List myPeerId,
-    Uint8List friendPeerId,
+    Uint8List myPublicKey,
+    Uint8List friendPublicKey,
   ) async {
     final db = await database;
-    final myIdHex = _bytesToHex(myPeerId);
-    final friendIdHex = _bytesToHex(friendPeerId);
+    final myIdHex = _bytesToHex(myPublicKey);
+    final friendIdHex = _bytesToHex(friendPublicKey);
 
     await db.delete(
       _messagesTable,
@@ -262,9 +279,9 @@ class DatabaseService {
   }
 
   /// Get the last message for each friend (for chat list preview)
-  Future<Map<String, Message>> getLastMessagesPerChat(Uint8List myPeerId) async {
+  Future<Map<String, Message>> getLastMessagesPerChat(Uint8List myPublicKey) async {
     final db = await database;
-    final myIdHex = _bytesToHex(myPeerId);
+    final myIdHex = _bytesToHex(myPublicKey);
 
     // Get all messages involving us
     final maps = await db.query(
@@ -301,9 +318,7 @@ class DatabaseService {
   /// Convert Peer to database map
   Map<String, dynamic> _peerToMap(Peer peer) {
     return {
-      'peer_id': _bytesToHex(peer.peerId),
-      'noise_pk': _bytesToHex(peer.noisePk),
-      'sign_pk': _bytesToHex(peer.signPk),
+      'public_key': _bytesToHex(peer.publicKey),
       'display_name': peer.displayName,
       'added_at': peer.addedAt.millisecondsSinceEpoch,
       'last_seen': peer.lastSeen?.millisecondsSinceEpoch,
@@ -314,9 +329,7 @@ class DatabaseService {
   /// Convert database map to Peer
   Peer _mapToPeer(Map<String, dynamic> map) {
     return Peer(
-      peerId: _hexToBytes(map['peer_id'] as String),
-      noisePk: _hexToBytes(map['noise_pk'] as String),
-      signPk: _hexToBytes(map['sign_pk'] as String),
+      publicKey: _hexToBytes(map['public_key'] as String),
       displayName: map['display_name'] as String,
       addedAt: DateTime.fromMillisecondsSinceEpoch(map['added_at'] as int),
       lastSeen: map['last_seen'] != null

@@ -163,8 +163,8 @@ class SettingsPage extends StatelessWidget {
                           ],
                         ),
                         _InfoRow(
-                          label: 'Peer ID',
-                          value: _formatPeerId(coordinator.myPeerId),
+                          label: 'Public Key',
+                          value: _formatPeerId(coordinator.myPublicKey),
                           monospace: true,
                         ),
                         _InfoRow(
@@ -275,11 +275,11 @@ class SettingsPage extends StatelessWidget {
           ElevatedButton(
             onPressed: () async {
               Navigator.of(context).pop();
-              await coordinator.regenerateServiceUUID();
+              await coordinator.regenerateIdentity();
               if (context.mounted) {
                 ScaffoldMessenger.of(context).showSnackBar(
                   SnackBar(
-                    content: Text('Service UUID regenerated successfully'),
+                    content: Text('Identity regenerated successfully'),
                     backgroundColor: Colors.green,
                   ),
                 );

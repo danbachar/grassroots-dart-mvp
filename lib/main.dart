@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:bluetooth_low_energy/bluetooth_low_energy.dart';
 
 import 'app_coordinator.dart';
 import 'models/peer.dart';
@@ -43,19 +44,20 @@ class _MyHomePageState extends State<MyHomePage> {
 
   @override
   void initState() {
-    print("Servus");
     super.initState();
     // Initialize BLE permissions
     WidgetsBinding.instance.addPostFrameCallback((_) {
       final coordinator = context.read<AppCoordinator>();
-      print("Initializing BLE coordinator...");
       coordinator.initialize();
       
       // Setup notification callback for incoming messages
       coordinator.onMessageReceived = _handleIncomingMessage;
-      
+
       // Setup notification callback for friend acceptance
       coordinator.onFriendAdded = _handleFriendAdded;
+
+      // Setup notification callback for incoming friend requests
+      coordinator.onFriendRequestReceived = _handleFriendRequest;
     });
   }
 
@@ -72,6 +74,120 @@ class _MyHomePageState extends State<MyHomePage> {
         backgroundColor: Colors.green,
         duration: Duration(seconds: 3),
         behavior: SnackBarBehavior.floating,
+      ),
+    );
+  }
+
+  void _handleFriendRequest(Peer requester) {
+    print("Showing dialog for friend request from ${requester.displayName}");
+    
+    showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (BuildContext dialogContext) => AlertDialog(
+        title: Row(
+          children: [
+            Icon(Icons.person_add, color: Colors.blue),
+            SizedBox(width: 12),
+            Text('Friend Request'),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              '${requester.displayName} wants to be your friend',
+              style: TextStyle(fontSize: 16),
+            ),
+            SizedBox(height: 16),
+            Container(
+              padding: EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.blue.shade50,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Row(
+                children: [
+                  CircleAvatar(
+                    backgroundColor: Colors.blue,
+                    child: Text(
+                      requester.displayName[0].toUpperCase(),
+                      style: TextStyle(color: Colors.white),
+                    ),
+                  ),
+                  SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          requester.displayName,
+                          style: TextStyle(
+                            fontWeight: FontWeight.bold,
+                            fontSize: 16,
+                          ),
+                        ),
+                        Text(
+                          'Nearby peer',
+                          style: TextStyle(
+                            color: Colors.grey.shade600,
+                            fontSize: 12,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Navigator.of(dialogContext).pop();
+              final coordinator = context.read<AppCoordinator>();
+              coordinator.rejectFriendRequest(requester);
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text('Friend request from ${requester.displayName} declined'),
+                  backgroundColor: Colors.orange,
+                ),
+              );
+            },
+            style: TextButton.styleFrom(
+              foregroundColor: Colors.grey,
+            ),
+            child: Text('Decline'),
+          ),
+          ElevatedButton.icon(
+            onPressed: () {
+              Navigator.of(dialogContext).pop();
+              final coordinator = context.read<AppCoordinator>();
+              coordinator.acceptFriendRequest(requester);
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Row(
+                    children: [
+                      Icon(Icons.check_circle, color: Colors.white),
+                      SizedBox(width: 12),
+                      Text('You and ${requester.displayName} are now friends!'),
+                    ],
+                  ),
+                  backgroundColor: Colors.green,
+                  duration: Duration(seconds: 3),
+                ),
+              );
+            },
+            icon: Icon(Icons.check),
+            label: Text('Accept'),
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.green,
+              foregroundColor: Colors.white,
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -132,13 +248,16 @@ class _MyHomePageState extends State<MyHomePage> {
     switch (selectedIndex) {
       case 0:
         page = NearbyPeersPage();
-        break;
+        // break;
       case 1:
-        page = ChatsPage();
-        break;
+        page = FriendsPage();
+        // break;
       case 2:
+        page = ChatsPage();
+        // break;
+      case 3:
         page = BluetoothPage();
-        break;
+        // break;
       default:
         page = Text('Unknown');
     }
@@ -156,6 +275,10 @@ class _MyHomePageState extends State<MyHomePage> {
                     NavigationRailDestination(
                       icon: Icon(Icons.people),
                       label: Text('Nearby'),
+                    ),
+                    NavigationRailDestination(
+                      icon: Icon(Icons.group),
+                      label: Text('Friends'),
                     ),
                     NavigationRailDestination(
                       icon: Icon(Icons.chat),
@@ -305,7 +428,21 @@ class NearbyPeersPage extends StatelessWidget {
                     ),
                     title: Row(
                       children: [
-                        Expanded(child: Text(peer.displayName)),
+                        Expanded(
+                          child: Row(
+                            children: [
+                              Text(peer.displayName),
+                              if (_isNearbyPeerFriend(coordinator, peer)) ...[
+                                SizedBox(width: 6),
+                                Icon(
+                                  Icons.check_circle,
+                                  color: Colors.green,
+                                  size: 16,
+                                ),
+                              ],
+                            ],
+                          ),
+                        ),
                         Icon(
                           Icons.bluetooth_connected,
                           color: Colors.blue,
@@ -314,17 +451,279 @@ class NearbyPeersPage extends StatelessWidget {
                       ],
                     ),
                     subtitle: Text(
-                      'In Range',
+                      _isNearbyPeerFriend(coordinator, peer)
+                          ? 'Friend • In Range'
+                          : 'In Range',
                       style: TextStyle(
                         color: Colors.green,
                         fontSize: 12,
                         fontWeight: FontWeight.w500,
                       ),
                     ),
-                    trailing: IconButton(
-                      icon: Icon(Icons.chat, color: Colors.blue),
-                      onPressed: () => _openChat(context, peer),
-                      tooltip: 'Open Chat',
+                    trailing: _buildActionButton(context, coordinator, peer),
+                  ),
+                );
+              },
+            ),
+    );
+  }
+
+  /// Check if a nearby peer is already a friend by comparing service UUIDs
+  bool _isNearbyPeerFriend(AppCoordinator coordinator, Peer peer) {
+    final peripheralId = peer.peripheral?.uuid.toString();
+    if (peripheralId == null) return false;
+
+    // Check if any friend's service UUID matches this peer's advertised services
+    for (final friend in coordinator.friends) {
+      final friendServiceUUID = friend.deriveServiceUUID().toLowerCase();
+
+      // Look up in scan results to get advertised services
+      for (final scanResult in coordinator.scanResults) {
+        if (scanResult.peripheral.uuid.toString() == peripheralId) {
+          for (final uuid in scanResult.advertisement.serviceUUIDs) {
+            if (uuid.toString().toLowerCase() == friendServiceUUID) {
+              return true;
+            }
+          }
+          break;
+        }
+      }
+    }
+
+    return false;
+  }
+
+  /// Build action button based on peer's friendship status
+  Widget _buildActionButton(BuildContext context, AppCoordinator coordinator, Peer peer) {
+    final peripheralId = peer.peripheral?.uuid.toString();
+    final isFriend = _isNearbyPeerFriend(coordinator, peer);
+
+    if (isFriend) {
+      // Already friends - show chat button
+      return IconButton(
+        icon: Icon(Icons.chat, color: Colors.blue),
+        onPressed: () => _openChat(context, peer),
+        tooltip: 'Open Chat',
+      );
+    }
+
+    // Check if there's a pending request for this peer
+    final isPending = peripheralId != null && coordinator.isPendingFriendRequest(peripheralId);
+
+    if (isPending) {
+      // Pending request - show waiting indicator
+      return Container(
+        padding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        decoration: BoxDecoration(
+          color: Colors.orange.withOpacity(0.1),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            SizedBox(
+              width: 16,
+              height: 16,
+              child: CircularProgressIndicator(strokeWidth: 2, color: Colors.orange),
+            ),
+            SizedBox(width: 8),
+            Text('Pending', style: TextStyle(color: Colors.orange, fontSize: 12)),
+          ],
+        ),
+      );
+    }
+
+    // Not a friend and no pending request - show add friend button
+    return ElevatedButton.icon(
+      onPressed: () => _sendFriendRequest(context, coordinator, peer),
+      icon: Icon(Icons.person_add, size: 18),
+      label: Text('Add Friend'),
+      style: ElevatedButton.styleFrom(
+        backgroundColor: Colors.green,
+        foregroundColor: Colors.white,
+        padding: EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      ),
+    );
+  }
+
+  /// Send a friend request to a nearby peer
+  Future<void> _sendFriendRequest(BuildContext context, AppCoordinator coordinator, Peer peer) async {
+    final peripheralId = peer.peripheral?.uuid.toString();
+    if (peripheralId == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Device not available')),
+      );
+      return;
+    }
+
+    // Find the DiscoveredEventArgs for this peer
+    DiscoveredEventArgs? deviceArgs;
+    for (final result in coordinator.scanResults) {
+      if (result.peripheral.uuid.toString() == peripheralId) {
+        deviceArgs = result;
+        break;
+      }
+    }
+
+    if (deviceArgs == null) {
+      // Try allDiscoveredDevices as fallback
+      for (final result in coordinator.allDiscoveredDevices) {
+        if (result.peripheral.uuid.toString() == peripheralId) {
+          deviceArgs = result;
+          break;
+        }
+      }
+    }
+
+    if (deviceArgs == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Device not found in scan results')),
+      );
+      return;
+    }
+
+    try {
+      await coordinator.sendFriendRequest(deviceArgs);
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Friend request sent to ${peer.displayName}'),
+            backgroundColor: Colors.green,
+          ),
+        );
+      }
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Failed to send friend request: $e'),
+            backgroundColor: Colors.red,
+          ),
+        );
+      }
+    }
+  }
+
+  void _openChat(BuildContext context, Peer peer) {
+    Navigator.of(context).push(
+      MaterialPageRoute(builder: (context) => ChatPage(friend: peer)),
+    );
+  }
+
+  bool _bytesEqual(List<int> a, List<int> b) {
+    if (a.length != b.length) return false;
+    for (int i = 0; i < a.length; i++) {
+      if (a[i] != b[i]) return false;
+    }
+    return true;
+  }
+}
+
+// ==================== Friends Page ====================
+
+class FriendsPage extends StatelessWidget {
+  @override
+  Widget build(BuildContext context) {
+    final coordinator = context.watch<AppCoordinator>();
+    final friends = coordinator.friends;
+
+    return Scaffold(
+      appBar: AppBar(
+        title: Text('Friends (${friends.length})'),
+        backgroundColor: Theme.of(context).colorScheme.primaryContainer,
+      ),
+      body: friends.isEmpty
+          ? Center(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(Icons.group_outlined, size: 64, color: Colors.grey),
+                  SizedBox(height: 16),
+                  Text(
+                    'No friends yet',
+                    style: TextStyle(fontSize: 18, color: Colors.grey),
+                  ),
+                  SizedBox(height: 8),
+                  Text(
+                    'Send friend requests from the Nearby tab',
+                    style: TextStyle(color: Colors.grey),
+                    textAlign: TextAlign.center,
+                  ),
+                ],
+              ),
+            )
+          : ListView.builder(
+              itemCount: friends.length,
+              itemBuilder: (context, index) {
+                final friend = friends[index];
+                final isInRange = coordinator.isFriendInRange(friend);
+
+                return Card(
+                  margin: EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  child: ListTile(
+                    leading: Stack(
+                      children: [
+                        CircleAvatar(
+                          radius: 28,
+                          backgroundColor: Theme.of(context).colorScheme.primary,
+                          child: Text(
+                            friend.displayName[0].toUpperCase(),
+                            style: TextStyle(color: Colors.white, fontSize: 20),
+                          ),
+                        ),
+                        // In-range indicator (green dot)
+                        if (isInRange)
+                          Positioned(
+                            right: 0,
+                            bottom: 0,
+                            child: Container(
+                              width: 16,
+                              height: 16,
+                              decoration: BoxDecoration(
+                                color: Colors.green,
+                                shape: BoxShape.circle,
+                                border: Border.all(color: Colors.white, width: 2),
+                              ),
+                            ),
+                          ),
+                      ],
+                    ),
+                    title: Text(
+                      friend.displayName,
+                      style: TextStyle(
+                        fontWeight: FontWeight.w600,
+                        fontSize: 16,
+                      ),
+                    ),
+                    subtitle: Text(
+                      isInRange ? 'In Range' : 'Not in range',
+                      style: TextStyle(
+                        color: isInRange ? Colors.green : Colors.grey,
+                        fontSize: 12,
+                      ),
+                    ),
+                    trailing: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        // Chat button
+                        IconButton(
+                          icon: Icon(Icons.chat, color: Colors.blue),
+                          onPressed: () {
+                            Navigator.of(context).push(
+                              MaterialPageRoute(
+                                builder: (context) => ChatPage(friend: friend),
+                              ),
+                            );
+                          },
+                          tooltip: 'Open Chat',
+                        ),
+                        // Delete button
+                        IconButton(
+                          icon: Icon(Icons.delete, color: Colors.red),
+                          onPressed: () => _showDeleteFriendDialog(context, coordinator, friend),
+                          tooltip: 'Delete Friend',
+                        ),
+                      ],
                     ),
                   ),
                 );
@@ -333,9 +732,76 @@ class NearbyPeersPage extends StatelessWidget {
     );
   }
 
-  void _openChat(BuildContext context, Peer peer) {
-    Navigator.of(context).push(
-      MaterialPageRoute(builder: (context) => ChatPage(friend: peer)),
+  void _showDeleteFriendDialog(BuildContext context, AppCoordinator coordinator, Peer friend) {
+    showDialog(
+      context: context,
+      builder: (BuildContext dialogContext) => AlertDialog(
+        title: Row(
+          children: [
+            Icon(Icons.warning, color: Colors.orange),
+            SizedBox(width: 12),
+            Text('Delete Friend?'),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Are you sure you want to remove ${friend.displayName} from your friends list?',
+              style: TextStyle(fontSize: 16),
+            ),
+            SizedBox(height: 16),
+            Container(
+              padding: EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.orange.shade50,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Row(
+                children: [
+                  Icon(Icons.info_outline, color: Colors.orange, size: 20),
+                  SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      'This will delete your chat history with this friend.',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: Colors.orange.shade900,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(dialogContext).pop(),
+            child: Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              Navigator.of(dialogContext).pop();
+              await coordinator.removeFriend(friend);
+              if (context.mounted) {
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text('${friend.displayName} removed from friends'),
+                    backgroundColor: Colors.orange,
+                  ),
+                );
+              }
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: Colors.red,
+              foregroundColor: Colors.white,
+            ),
+            child: Text('Delete'),
+          ),
+        ],
+      ),
     );
   }
 }
@@ -455,7 +921,7 @@ class _ChatListTile extends StatelessWidget {
     String messagePreview = 'No messages yet';
     bool isSentByMe = false;
     if (lastMessage != null) {
-      isSentByMe = _bytesEqual(lastMessage.senderId, coordinator.myPeerId);
+      isSentByMe = _bytesEqual(lastMessage.senderId, coordinator.myPublicKey);
       messagePreview = lastMessage.content;
       // Truncate to first line and add ellipsis if needed
       final firstLineEnd = messagePreview.indexOf('\n');
@@ -706,27 +1172,27 @@ class _BluetoothPageState extends State<BluetoothPage> {
           ),
           
           // Info text
-          Padding(
-            padding: EdgeInsets.symmetric(horizontal: 16),
-            child: Card(
-              color: Colors.blue.shade50,
-              child: Padding(
-                padding: EdgeInsets.all(16),
-                child: Row(
-                  children: [
-                    Icon(Icons.info_outline, color: Colors.blue),
-                    SizedBox(width: 12),
-                    Expanded(
-                      child: Text(
-                        'Grassroots devices are automatically discovered and appear in the Nearby tab. No manual pairing required!',
-                        style: TextStyle(color: Colors.blue.shade700),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-            ),
-          ),
+          // Padding(
+          //   padding: EdgeInsets.symmetric(horizontal: 16),
+          //   child: Card(
+          //     color: Colors.blue.shade50,
+          //     child: Padding(
+          //       padding: EdgeInsets.all(16),
+          //       child: Row(
+          //         children: [
+          //           Icon(Icons.info_outline, color: Colors.blue),
+          //           SizedBox(width: 12),
+          //           Expanded(
+          //             child: Text(
+          //               'Grassroots devices are automatically discovered and appear in the Nearby tab. No manual pairing required!',
+          //               style: TextStyle(color: Colors.blue.shade700),
+          //             ),
+          //           ),
+          //         ],
+          //       ),
+          //     ),
+          //   ),
+          // ),
           
           // Raw discovered devices (for debugging)
           Expanded(
@@ -885,7 +1351,7 @@ class _ChatPageState extends State<ChatPage> {
                       final message = messages[messages.length - 1 - index];
                       final isSentByMe = _bytesEqual(
                         message.senderId,
-                        coordinator.myPeerId,
+                        coordinator.myPublicKey,
                       );
 
                       return _MessageBubble(

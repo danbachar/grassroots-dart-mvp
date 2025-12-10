@@ -12,8 +12,8 @@ class Packet {
   final int payloadLength;  // 2 bytes
 
   // Variable fields
-  final Uint8List? senderId;      // 8 bytes (PeerID)
-  final Uint8List? recipientId;   // 8 bytes (PeerID, optional)
+  final Uint8List? senderId;      // 32 bytes (Ed25519 public key)
+  final Uint8List? recipientId;   // 32 bytes (Ed25519 public key, optional)
   final Uint8List payload;        // Variable length
   final Uint8List? signature;     // 64 bytes (Ed25519, optional)
 
@@ -38,11 +38,11 @@ class Packet {
     if (this.payload.length > Limits.maxMessageSize) {
       throw ArgumentError('Payload exceeds maximum size');
     }
-    if (senderId != null && senderId!.length != 8) {
-      throw ArgumentError('Sender ID must be 8 bytes');
+    if (senderId != null && senderId!.length != 32) {
+      throw ArgumentError('Sender ID must be 32 bytes (Ed25519 public key)');
     }
-    if (recipientId != null && recipientId!.length != 8) {
-      throw ArgumentError('Recipient ID must be 8 bytes');
+    if (recipientId != null && recipientId!.length != 32) {
+      throw ArgumentError('Recipient ID must be 32 bytes (Ed25519 public key)');
     }
     if (signature != null && signature!.length != 64) {
       throw ArgumentError('Signature must be 64 bytes');
@@ -101,17 +101,17 @@ class Packet {
 
     // Read sender ID (always present in our implementation)
     Uint8List? senderId;
-    if (offset + 8 <= bytes.length) {
-      senderId = bytes.sublist(offset, offset + 8);
-      offset += 8;
+    if (offset + 32 <= bytes.length) {
+      senderId = bytes.sublist(offset, offset + 32);
+      offset += 32;
     }
 
     // Read recipient ID if flag is set
     Uint8List? recipientId;
     if ((flags & PacketFlags.hasRecipient) != 0) {
-      if (offset + 8 <= bytes.length) {
-        recipientId = bytes.sublist(offset, offset + 8);
-        offset += 8;
+      if (offset + 32 <= bytes.length) {
+        recipientId = bytes.sublist(offset, offset + 32);
+        offset += 32;
       }
     }
 
